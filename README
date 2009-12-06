@@ -3,14 +3,14 @@ Repository contains patches produced by Layer-2 filtering for FreeBSD project.
 FreeBSD wiki:
 http://wiki.freebsd.org/SummerOfCode2008#head-d7b70c76e2d101743852a1737a53e3d146417768
 
-Blog, contains example and more-or-less complite feature list:
+Blog, contains examples and more or less complete feature list:
 http://blogs.freebsdish.org/gleb/tag/l2filter/
 
 Project has started as a Google Summer of Code'2008 project. I've implemented
 some features afterwards. The code is not actively maintained at the moment, so
 patches may not apply cleanly (let me know that's the case, I'll fix it).
 
-There is an unmaintained and outdated projects/l2filter branch in FreeBSD svn
+There is an unmaintained and outdated projects/l2filter branch in FreeBSD SVN
 repository, please contact me if you are interested in keeping branch updated
 or importing patches to -CURRENT:
 http://svn.freebsd.org/viewvc/base/projects/l2filter/
