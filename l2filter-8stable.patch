@@ -1,14 +1,14 @@
-FreeBSD 8-STABLE patch. SVN rev 197734. Generated on 2009 November 29
+FreeBSD 8-STABLE patch. SVN rev 203554
 
 Changelog:
-* Preserve old opcodes for compatability
-* Fix panic in pf (pf_send_tcp)
-* Fix incorrect bits for l2tag and l2filter bit flags in ifconfig
-* Fix usage ipfw.8 
-* Style
+* Fix dummynet with tags mask panic
+* Fix dummynet+vnet panics
+* Use dummynet fast io for layer2 packets to prevent reentering ipfw
+* Fix ip_fw_pfil.c mismerge. Remove dummynet tags after processing
+* Use malloc(M_WAITOK) in ipfw:add_table_entry
 
 diff --git a/contrib/pf/man/pf.conf.5 b/contrib/pf/man/pf.conf.5
-index 67cb717..0740773 100644
+index 98c3d0e..3bf922c 100644
 --- a/contrib/pf/man/pf.conf.5
 +++ b/contrib/pf/man/pf.conf.5
 @@ -123,6 +123,7 @@ and
@@ -41,7 +41,7 @@ index 67cb717..0740773 100644
  .It Ar max Aq Ar number
  Limits the number of concurrent states the rule may create.
  When this limit is reached, further packets matching the rule that would
-@@ -2735,6 +2744,9 @@ pass in on $ext_if proto tcp from any to any port { ssh, smtp, domain, \e
+@@ -2742,6 +2751,9 @@ pass in on $ext_if proto tcp from any to any port { ssh, smtp, domain, \e
  block in on $ext_if proto tcp from any os {"Windows 95", "Windows 98"} \e
        to any port smtp
  
@@ -51,7 +51,7 @@ index 67cb717..0740773 100644
  # IPv6
  # pass in/out all IPv6 traffic: note that we have to enable this in two
  # different ways, on both our physical interface and our tunnel
-@@ -2835,7 +2847,7 @@ tableopts-list = tableopts-list tableopts | tableopts
+@@ -2842,7 +2854,7 @@ tableopts-list = tableopts-list tableopts | tableopts
  tableopts      = "persist" | "const" | "file" string |
                   "{" [ tableaddr-list ] "}"
  tableaddr-list = tableaddr-list [ "," ] tableaddr-spec | tableaddr-spec
@@ -60,7 +60,7 @@ index 67cb717..0740773 100644
  tableaddr      = hostname | ipv4-dotted-quad | ipv6-coloned-hex |
                   interface-name | "self"
  
-@@ -2890,7 +2902,7 @@ host           = [ "!" ] ( address [ "/" mask-bits ] | "\*(Lt" string "\*(Gt" )
+@@ -2897,7 +2909,7 @@ host           = [ "!" ] ( address [ "/" mask-bits ] | "\*(Lt" string "\*(Gt" )
  redirhost      = address [ "/" mask-bits ]
  routehost      = "(" interface-name [ address [ "/" mask-bits ] ] ")"
  address        = ( interface-name | "(" interface-name ")" | hostname |
@@ -69,25 +69,25 @@ index 67cb717..0740773 100644
  host-list      = host [ [ "," ] host-list ]
  redirhost-list = redirhost [ [ "," ] redirhost-list ]
  routehost-list = routehost [ [ "," ] routehost-list ]
-@@ -2923,7 +2935,7 @@ tos            = "tos" ( "lowdelay" | "throughput" | "reliability" |
+@@ -2930,7 +2942,7 @@ tos            = "tos" ( "lowdelay" | "throughput" | "reliability" |
                   [ "0x" ] number )
  
  state-opts     = state-opt [ [ "," ] state-opts ]
--state-opt      = ( "max" number | "no-sync" | timeout |
-+state-opt      = ( "ether" | "max" number | "no-sync" | timeout |
+-state-opt      = ( "max" number | "no-sync" | timeout | sloppy |
++state-opt      = ( "ether" | "max" number | "no-sync" | timeout | sloppy |
                   "source-track" [ ( "rule" | "global" ) ] |
                   "max-src-nodes" number | "max-src-states" number |
                   "max-src-conn" number |
 diff --git a/contrib/pf/pfctl/parse.y b/contrib/pf/pfctl/parse.y
-index 9817e8e..343ee70 100644
+index c22a0b6..d0da5dc 100644
 --- a/contrib/pf/pfctl/parse.y
 +++ b/contrib/pf/pfctl/parse.y
 @@ -128,7 +128,7 @@ enum	{ PF_STATE_OPT_MAX, PF_STATE_OPT_NOSYNC, PF_STATE_OPT_SRCTRACK,
  	    PF_STATE_OPT_MAX_SRC_STATES, PF_STATE_OPT_MAX_SRC_CONN,
  	    PF_STATE_OPT_MAX_SRC_CONN_RATE, PF_STATE_OPT_MAX_SRC_NODES,
  	    PF_STATE_OPT_OVERLOAD, PF_STATE_OPT_STATELOCK,
--	    PF_STATE_OPT_TIMEOUT };
-+	    PF_STATE_OPT_TIMEOUT, PF_STATE_OPT_ETHER };
+-	    PF_STATE_OPT_TIMEOUT, PF_STATE_OPT_SLOPPY };
++	    PF_STATE_OPT_TIMEOUT, PF_STATE_OPT_SLOPPY, PF_STATE_OPT_ETHER };
  
  enum	{ PF_SRCTRACK_NONE, PF_SRCTRACK, PF_SRCTRACK_GLOBAL, PF_SRCTRACK_RULE };
  
@@ -109,7 +109,7 @@ index 9817e8e..343ee70 100644
  %type	<v.host>		redir_host_list redirspec
  %type	<v.host>		route_host route_host_list routespec
  %type	<v.os>			os xos os_list
-@@ -1906,6 +1906,10 @@ pfrule		: action dir logquick interface route af proto fromto
+@@ -1914,6 +1914,10 @@ pfrule		: action dir logquick interface route af proto fromto
  					}
  					r.timeout[o->data.timeout.number] =
  					    o->data.timeout.seconds;
@@ -120,7 +120,7 @@ index 9817e8e..343ee70 100644
  				}
  				o = o->next;
  				free(p);
-@@ -2471,12 +2475,41 @@ host_list	: ipspec			{ $$ = $1; }
+@@ -2479,12 +2483,41 @@ host_list	: ipspec			{ $$ = $1; }
  		}
  		;
  
@@ -163,7 +163,7 @@ index 9817e8e..343ee70 100644
  		}
  		| not NOROUTE			{
  			$$ = calloc(1, sizeof(struct node_host));
-@@ -3198,6 +3231,14 @@ state_opt_item	: MAXIMUM number		{
+@@ -3206,6 +3239,14 @@ state_opt_item	: MAXIMUM number		{
  			$$->next = NULL;
  			$$->tail = $$;
  		}
@@ -178,7 +178,7 @@ index 9817e8e..343ee70 100644
  		| sourcetrack {
  			$$ = calloc(1, sizeof(struct node_state_opt));
  			if ($$ == NULL)
-@@ -4894,6 +4935,7 @@ lookup(char *s)
+@@ -4917,6 +4958,7 @@ lookup(char *s)
  		{ "drop",		DROP},
  		{ "drop-ovl",		FRAGDROP},
  		{ "dup-to",		DUPTO},
@@ -187,7 +187,7 @@ index 9817e8e..343ee70 100644
  		{ "file",		FILENAME},
  		{ "fingerprints",	FINGERPRINTS},
 diff --git a/contrib/pf/pfctl/pf_print_state.c b/contrib/pf/pfctl/pf_print_state.c
-index b3a693a..8558f98 100644
+index 02a39b3..438c9fc 100644
 --- a/contrib/pf/pfctl/pf_print_state.c
 +++ b/contrib/pf/pfctl/pf_print_state.c
 @@ -85,7 +85,8 @@ print_addr(struct pf_addr_wrap *addr, sa_family_t af, int verbose)
@@ -239,7 +239,7 @@ index b3a693a..8558f98 100644
  }
  
  void
-@@ -299,6 +325,29 @@ print_state(struct pf_state *s, int opts)
+@@ -301,6 +327,29 @@ print_state(struct pf_state *s, int opts)
  		if (s->nat_src_node != NULL)
  			printf(", sticky-address");
  		printf("\n");
@@ -297,7 +297,7 @@ index 98a1bef..459c5a3 100644
  void	 print_seq(struct pf_state_peer *);
  void	 print_state(struct pf_state *, int);
 diff --git a/contrib/pf/pfctl/pfctl_parser.c b/contrib/pf/pfctl/pfctl_parser.c
-index 9f232bd..abea42a 100644
+index c9b2e11..a027f5c 100644
 --- a/contrib/pf/pfctl/pfctl_parser.c
 +++ b/contrib/pf/pfctl/pfctl_parser.c
 @@ -46,6 +46,7 @@ __FBSDID("$FreeBSD$");
@@ -319,7 +319,7 @@ index 9f232bd..abea42a 100644
  		printf(" all");
  	else {
  		printf(" from ");
-@@ -876,6 +879,8 @@ print_rule(struct pf_rule *r, const char *anchor_call, int verbose)
+@@ -878,6 +881,8 @@ print_rule(struct pf_rule *r, const char *anchor_call, int verbose)
  	for (i = 0; !opts && i < PFTM_MAX; ++i)
  		if (r->timeout[i])
  			opts = 1;
@@ -328,7 +328,7 @@ index 9f232bd..abea42a 100644
  	if (opts) {
  		printf(" (");
  		if (r->max_states) {
-@@ -954,6 +959,12 @@ print_rule(struct pf_rule *r, const char *anchor_call, int verbose)
+@@ -962,6 +967,12 @@ print_rule(struct pf_rule *r, const char *anchor_call, int verbose)
  				    "inv.timeout" : pf_timeouts[j].name,
  				    r->timeout[i]);
  			}
@@ -341,7 +341,7 @@ index 9f232bd..abea42a 100644
  		printf(")");
  	}
  	if (r->rule_flag & PFRULE_FRAGMENT)
-@@ -1419,6 +1430,35 @@ host(const char *s)
+@@ -1427,6 +1438,35 @@ host(const char *s)
  }
  
  struct node_host *
@@ -377,7 +377,7 @@ index 9f232bd..abea42a 100644
  host_if(const char *s, int mask)
  {
  	struct node_host	*n, *h = NULL;
-@@ -1606,16 +1646,39 @@ host_dns(const char *s, int v4mask, int v6mask)
+@@ -1614,16 +1654,39 @@ host_dns(const char *s, int v4mask, int v6mask)
  int
  append_addr(struct pfr_buffer *b, char *s, int test)
  {
@@ -419,7 +419,7 @@ index 9f232bd..abea42a 100644
  	rv = append_addr_host(b, n, test, not);
  	do {
  		h = n;
-@@ -1661,6 +1724,7 @@ append_addr_host(struct pfr_buffer *b, struct node_host *n, int test, int not)
+@@ -1669,6 +1732,7 @@ append_addr_host(struct pfr_buffer *b, struct node_host *n, int test, int not)
  			errno = EINVAL;
  			return (-1);
  		}
@@ -480,7 +480,7 @@ index 3d54466..e8f9cc4 100644
  		if (strlcpy(buf, "{error}", sizeof(buf)) >= sizeof(buf))
  			errx(1, "print_addrx: strlcpy");
 diff --git a/sbin/ifconfig/ifconfig.8 b/sbin/ifconfig/ifconfig.8
-index 1d2f096..b68b2e1 100644
+index c372a08..3568a69 100644
 --- a/sbin/ifconfig/ifconfig.8
 +++ b/sbin/ifconfig/ifconfig.8
 @@ -240,6 +240,27 @@ and will never send any requests.
@@ -512,7 +512,7 @@ index 1d2f096..b68b2e1 100644
  (Inet only.)
  Specify the address to use to represent broadcasts to the
 diff --git a/sbin/ifconfig/ifconfig.c b/sbin/ifconfig/ifconfig.c
-index f05374c..d71c3a7 100644
+index f05374c..aedc894 100644
 --- a/sbin/ifconfig/ifconfig.c
 +++ b/sbin/ifconfig/ifconfig.c
 @@ -825,7 +825,7 @@ setifname(const char *val, int dummy __unused, int s,
@@ -520,7 +520,7 @@ index f05374c..d71c3a7 100644
  "\020\1UP\2BROADCAST\3DEBUG\4LOOPBACK\5POINTOPOINT\6SMART\7RUNNING" \
  "\10NOARP\11PROMISC\12ALLMULTI\13OACTIVE\14SIMPLEX\15LINK0\16LINK1\17LINK2" \
 -"\20MULTICAST\22PPROMISC\23MONITOR\24STATICARP"
-+"\20MULTICAST\22PPROMISC\23MONITOR\24STATICARP\27L2FILTER\30L2TAG"
++"\20MULTICAST\22PPROMISC\23MONITOR\24STATICARP\30L2FILTER\31L2TAG"
  
  #define	IFCAPBITS \
  "\020\1RXCSUM\2TXCSUM\3NETCONS\4VLAN_MTU\5VLAN_HWTAGGING\6JUMBO_MTU\7POLLING" \
@@ -536,7 +536,7 @@ index f05374c..d71c3a7 100644
  	DEF_CMD("-rxcsum",	-IFCAP_RXCSUM,	setifcap),
  	DEF_CMD("txcsum",	IFCAP_TXCSUM,	setifcap),
 diff --git a/sbin/ipfw/dummynet.c b/sbin/ipfw/dummynet.c
-index 1473284..adbd990 100644
+index 9e68e65..5d4fcce 100644
 --- a/sbin/ipfw/dummynet.c
 +++ b/sbin/ipfw/dummynet.c
 @@ -33,6 +33,7 @@
@@ -672,7 +672,7 @@ index 1473284..adbd990 100644
  }
  
  static void
-@@ -692,6 +741,77 @@ load_extra_delays(const char *filename, struct dn_pipe *p)
+@@ -694,6 +743,78 @@ load_extra_delays(const char *filename, struct dn_pipe *p)
  	strncpy(p->name, profile_name, sizeof(p->name));
  }
  
@@ -683,7 +683,8 @@ index 1473284..adbd990 100644
 +	const int mask_capacity = 64;
 +	uint64_t mask, mask_cp, max_mask;
 +	int mask_len, n;
-+	u_char *end, *p;
++	char *end;
++	u_char *p;
 +
 +	mask = 0ULL;
 +	mask_len = 0;
@@ -750,7 +751,7 @@ index 1473284..adbd990 100644
  void
  ipfw_config_pipe(int ac, char **av)
  {
-@@ -766,12 +886,7 @@ ipfw_config_pipe(int ac, char **av)
+@@ -768,12 +889,7 @@ ipfw_config_pipe(int ac, char **av)
  			end = NULL;
  
  			while (ac >= 1) {
@@ -764,7 +765,7 @@ index 1473284..adbd990 100644
  			    tok = match_token(dummynet_params, *av);
  			    ac--; av++;
  			    switch(tok) {
-@@ -788,78 +903,88 @@ ipfw_config_pipe(int ac, char **av)
+@@ -790,78 +906,88 @@ ipfw_config_pipe(int ac, char **av)
  				    n2mask(&(p.fs.flow_mask.src_ip6), 128);
  				    p.fs.flow_mask.flow_id6 = ~0;
  				    p.fs.flags_fs |= DN_HAVE_FLOW_MASK;
@@ -896,7 +897,7 @@ index 1473284..adbd990 100644
  end_mask:
  			break;
 diff --git a/sbin/ipfw/ipfw.8 b/sbin/ipfw/ipfw.8
-index 0d08665..e053b14 100644
+index f8b0746..c961a75 100644
 --- a/sbin/ipfw/ipfw.8
 +++ b/sbin/ipfw/ipfw.8
 @@ -45,9 +45,9 @@
@@ -1884,7 +1885,7 @@ index 3916057..1d2ea07 100644
  
  	exit(0);
 diff --git a/share/man/man4/bridge.4 b/share/man/man4/bridge.4
-index a31891a..eac7409 100644
+index 7d45356..5933036 100644
 --- a/share/man/man4/bridge.4
 +++ b/share/man/man4/bridge.4
 @@ -187,6 +187,14 @@ Set to
@@ -1940,10 +1941,10 @@ index a31891a..eac7409 100644
  .Pp
  ARP and REVARP packets are forwarded without being filtered and others
 diff --git a/sys/contrib/pf/net/pf.c b/sys/contrib/pf/net/pf.c
-index e8031ac..f398ffd 100644
+index ebe73c2..25db596 100644
 --- a/sys/contrib/pf/net/pf.c
 +++ b/sys/contrib/pf/net/pf.c
-@@ -335,6 +335,8 @@ struct pf_pool_limit pf_pool_limits[PF_LIMIT_MAX] = {
+@@ -342,6 +342,8 @@ struct pf_pool_limit pf_pool_limits[PF_LIMIT_MAX] = {
  			    kif, &key, PF_LAN_EXT);			\
  		if (*state == NULL || (*state)->timeout == PFTM_PURGE)	\
  			return (PF_DROP);				\
@@ -1952,7 +1953,7 @@ index e8031ac..f398ffd 100644
  		if (direction == PF_OUT &&				\
  		    (((*state)->rule.ptr->rt == PF_ROUTETO &&		\
  		    (*state)->rule.ptr->direction == PF_OUT) ||		\
-@@ -699,6 +701,35 @@ pf_find_state_all(struct pf_state_cmp *key, u_int8_t tree, int *more)
+@@ -706,6 +708,35 @@ pf_find_state_all(struct pf_state_cmp *key, u_int8_t tree, int *more)
  	}
  }
  
@@ -1988,7 +1989,7 @@ index e8031ac..f398ffd 100644
  void
  pf_init_threshold(struct pf_threshold *threshold,
      u_int32_t limit, u_int32_t seconds)
-@@ -1965,7 +1996,11 @@ pf_send_tcp(const struct pf_rule *r, sa_family_t af,
+@@ -1972,7 +2003,11 @@ pf_send_tcp(const struct pf_rule *r, sa_family_t af,
  #endif
  		h->ip_ttl = ttl ? ttl : V_ip_defttl;
  		h->ip_sum = 0;
@@ -2001,7 +2002,7 @@ index e8031ac..f398ffd 100644
  #ifdef __FreeBSD__
  			PF_UNLOCK();
  			ip_output(m, (void *)NULL, (void *)NULL, 0,
-@@ -2147,6 +2182,27 @@ pf_match_addr(u_int8_t n, struct pf_addr *a, struct pf_addr *m,
+@@ -2154,6 +2189,27 @@ pf_match_addr(u_int8_t n, struct pf_addr *a, struct pf_addr *m,
  }
  
  int
@@ -2029,7 +2030,7 @@ index e8031ac..f398ffd 100644
  pf_match(u_int8_t op, u_int32_t a1, u_int32_t a2, u_int32_t p)
  {
  	switch (op) {
-@@ -3344,14 +3400,14 @@ pf_test_tcp(struct pf_rule **rm, struct pf_state **sm, int direction,
+@@ -3351,14 +3407,14 @@ pf_test_tcp(struct pf_rule **rm, struct pf_state **sm, int direction,
  			r = r->skip[PF_SKIP_AF].ptr;
  		else if (r->proto && r->proto != IPPROTO_TCP)
  			r = r->skip[PF_SKIP_PROTO].ptr;
@@ -2048,7 +2049,7 @@ index e8031ac..f398ffd 100644
  			r = r->skip[PF_SKIP_DST_ADDR].ptr;
  		else if (r->dst.port_op && !pf_match_port(r->dst.port_op,
  		    r->dst.port[0], r->dst.port[1], th->th_dport))
-@@ -3535,11 +3591,15 @@ cleanup:
+@@ -3545,11 +3601,15 @@ cleanup:
  		s->proto = IPPROTO_TCP;
  		s->direction = direction;
  		s->af = af;
@@ -2064,7 +2065,7 @@ index e8031ac..f398ffd 100644
  			if (nr != NULL) {
  				PF_ACPY(&s->lan.addr, &pd->baddr, af);
  				s->lan.port = bport;
-@@ -3550,8 +3610,10 @@ cleanup:
+@@ -3560,8 +3620,10 @@ cleanup:
  		} else {
  			PF_ACPY(&s->lan.addr, daddr, af);
  			s->lan.port = th->th_dport;
@@ -2075,7 +2076,7 @@ index e8031ac..f398ffd 100644
  			if (nr != NULL) {
  				PF_ACPY(&s->gwy.addr, &pd->baddr, af);
  				s->gwy.port = bport;
-@@ -3766,14 +3828,14 @@ pf_test_udp(struct pf_rule **rm, struct pf_state **sm, int direction,
+@@ -3776,14 +3838,14 @@ pf_test_udp(struct pf_rule **rm, struct pf_state **sm, int direction,
  			r = r->skip[PF_SKIP_AF].ptr;
  		else if (r->proto && r->proto != IPPROTO_UDP)
  			r = r->skip[PF_SKIP_PROTO].ptr;
@@ -2094,7 +2095,7 @@ index e8031ac..f398ffd 100644
  			r = r->skip[PF_SKIP_DST_ADDR].ptr;
  		else if (r->dst.port_op && !pf_match_port(r->dst.port_op,
  		    r->dst.port[0], r->dst.port[1], uh->uh_dport))
-@@ -3932,11 +3994,15 @@ cleanup:
+@@ -3945,11 +4007,15 @@ cleanup:
  		s->proto = IPPROTO_UDP;
  		s->direction = direction;
  		s->af = af;
@@ -2110,7 +2111,7 @@ index e8031ac..f398ffd 100644
  			if (nr != NULL) {
  				PF_ACPY(&s->lan.addr, &pd->baddr, af);
  				s->lan.port = bport;
-@@ -3947,8 +4013,10 @@ cleanup:
+@@ -3960,8 +4026,10 @@ cleanup:
  		} else {
  			PF_ACPY(&s->lan.addr, daddr, af);
  			s->lan.port = uh->uh_dport;
@@ -2121,7 +2122,7 @@ index e8031ac..f398ffd 100644
  			if (nr != NULL) {
  				PF_ACPY(&s->gwy.addr, &pd->baddr, af);
  				s->gwy.port = bport;
-@@ -4123,11 +4191,11 @@ pf_test_icmp(struct pf_rule **rm, struct pf_state **sm, int direction,
+@@ -4136,11 +4204,11 @@ pf_test_icmp(struct pf_rule **rm, struct pf_state **sm, int direction,
  			r = r->skip[PF_SKIP_AF].ptr;
  		else if (r->proto && r->proto != pd->proto)
  			r = r->skip[PF_SKIP_PROTO].ptr;
@@ -2137,7 +2138,7 @@ index e8031ac..f398ffd 100644
  			r = r->skip[PF_SKIP_DST_ADDR].ptr;
  		else if (r->type && r->type != icmptype + 1)
  			r = TAILQ_NEXT(r, entries);
-@@ -4245,11 +4313,15 @@ cleanup:
+@@ -4261,11 +4329,15 @@ cleanup:
  		s->proto = pd->proto;
  		s->direction = direction;
  		s->af = af;
@@ -2153,7 +2154,7 @@ index e8031ac..f398ffd 100644
  			if (nr != NULL) {
  				PF_ACPY(&s->lan.addr, &pd->baddr, af);
  				s->lan.port = bport;
-@@ -4260,8 +4332,10 @@ cleanup:
+@@ -4276,8 +4348,10 @@ cleanup:
  		} else {
  			PF_ACPY(&s->lan.addr, daddr, af);
  			s->lan.port = nport;
@@ -2164,7 +2165,7 @@ index e8031ac..f398ffd 100644
  			if (nr != NULL) {
  				PF_ACPY(&s->gwy.addr, &pd->baddr, af);
  				s->gwy.port = bport;
-@@ -4386,11 +4460,11 @@ pf_test_other(struct pf_rule **rm, struct pf_state **sm, int direction,
+@@ -4402,11 +4476,11 @@ pf_test_other(struct pf_rule **rm, struct pf_state **sm, int direction,
  			r = r->skip[PF_SKIP_AF].ptr;
  		else if (r->proto && r->proto != pd->proto)
  			r = r->skip[PF_SKIP_PROTO].ptr;
@@ -2180,7 +2181,7 @@ index e8031ac..f398ffd 100644
  			r = r->skip[PF_SKIP_DST_ADDR].ptr;
  		else if (r->tos && !(r->tos == pd->tos))
  			r = TAILQ_NEXT(r, entries);
-@@ -4532,16 +4606,22 @@ cleanup:
+@@ -4551,16 +4625,22 @@ cleanup:
  		s->proto = pd->proto;
  		s->direction = direction;
  		s->af = af;
@@ -2203,7 +2204,7 @@ index e8031ac..f398ffd 100644
  			if (nr != NULL)
  				PF_ACPY(&s->gwy.addr, &pd->baddr, af);
  			else
-@@ -4603,11 +4683,11 @@ pf_test_fragment(struct pf_rule **rm, int direction, struct pfi_kif *kif,
+@@ -4622,11 +4702,11 @@ pf_test_fragment(struct pf_rule **rm, int direction, struct pfi_kif *kif,
  			r = r->skip[PF_SKIP_AF].ptr;
  		else if (r->proto && r->proto != pd->proto)
  			r = r->skip[PF_SKIP_PROTO].ptr;
@@ -2219,7 +2220,7 @@ index e8031ac..f398ffd 100644
  			r = r->skip[PF_SKIP_DST_ADDR].ptr;
  		else if (r->tos && !(r->tos == pd->tos))
  			r = TAILQ_NEXT(r, entries);
-@@ -6903,6 +6983,12 @@ pf_test(int dir, struct ifnet *ifp, struct mbuf **m0,
+@@ -7021,6 +7101,12 @@ pf_test(int dir, struct ifnet *ifp, struct mbuf **m0,
  	pd.tos = h->ip_tos;
  	pd.tot_len = ntohs(h->ip_len);
  	pd.eh = eh;
@@ -2232,7 +2233,7 @@ index e8031ac..f398ffd 100644
  
  	/* handle fragments that didn't get reassembled by normalization */
  	if (h->ip_off & htons(IP_MF | IP_OFFMASK)) {
-@@ -7297,6 +7383,12 @@ pf_test6(int dir, struct ifnet *ifp, struct mbuf **m0,
+@@ -7415,6 +7501,12 @@ pf_test6(int dir, struct ifnet *ifp, struct mbuf **m0,
  	pd.tos = 0;
  	pd.tot_len = ntohs(h->ip6_plen) + sizeof(struct ip6_hdr);
  	pd.eh = eh;
@@ -2384,7 +2385,7 @@ index 40c9f67..a0e48d6 100644
  		kt->pfrkt_match++;
  	else
 diff --git a/sys/contrib/pf/net/pfvar.h b/sys/contrib/pf/net/pfvar.h
-index 32e721c..52f550c 100644
+index de175b1..d30ed0a 100644
 --- a/sys/contrib/pf/net/pfvar.h
 +++ b/sys/contrib/pf/net/pfvar.h
 @@ -165,6 +165,14 @@ struct pf_addr {
@@ -2458,7 +2459,7 @@ index 32e721c..52f550c 100644
  
  /* scrub flags */
  #define	PFRULE_NODF		0x0100
-@@ -752,6 +771,8 @@ struct pf_state_scrub {
+@@ -753,6 +772,8 @@ struct pf_state_scrub {
  
  struct pf_state_host {
  	struct pf_addr	addr;
@@ -2467,7 +2468,7 @@ index 32e721c..52f550c 100644
  	u_int16_t	port;
  	u_int16_t	pad;
  };
-@@ -796,6 +817,7 @@ struct pf_state {
+@@ -797,6 +818,7 @@ struct pf_state {
  #ifdef __FreeBSD__
  	u_int8_t	 local_flags;
  #define	PFSTATE_EXPIRING 0x01
@@ -2475,7 +2476,7 @@ index 32e721c..52f550c 100644
  #else
  	u_int8_t	 pad;
  #endif
-@@ -902,6 +924,7 @@ struct pfr_addr {
+@@ -905,6 +927,7 @@ struct pfr_addr {
  	u_int8_t	 pfra_net;
  	u_int8_t	 pfra_not;
  	u_int8_t	 pfra_fback;
@@ -2483,7 +2484,7 @@ index 32e721c..52f550c 100644
  };
  #define	pfra_ip4addr	pfra_u._pfra_ip4addr
  #define	pfra_ip6addr	pfra_u._pfra_ip6addr
-@@ -945,6 +968,7 @@ SLIST_HEAD(pfr_kentryworkq, pfr_kentry);
+@@ -948,6 +971,7 @@ SLIST_HEAD(pfr_kentryworkq, pfr_kentry);
  struct pfr_kentry {
  	struct radix_node	 pfrke_node[2];
  	union sockaddr_union	 pfrke_sa;
@@ -2491,7 +2492,7 @@ index 32e721c..52f550c 100644
  	u_int64_t		 pfrke_packets[PFR_DIR_MAX][PFR_OP_ADDR_MAX];
  	u_int64_t		 pfrke_bytes[PFR_DIR_MAX][PFR_OP_ADDR_MAX];
  	SLIST_ENTRY(pfr_kentry)	 pfrke_workq;
-@@ -1054,6 +1078,10 @@ struct pf_pdesc {
+@@ -1057,6 +1081,10 @@ struct pf_pdesc {
  	struct pf_addr	*dst;
  	struct ether_header
  			*eh;
@@ -2502,7 +2503,7 @@ index 32e721c..52f550c 100644
  	struct pf_mtag	*pf_mtag;
  	u_int16_t	*ip_sum;
  	u_int32_t	 p_len;		/* total length of payload */
-@@ -1655,6 +1683,8 @@ int	pflog_packet(struct pfi_kif *, struct mbuf *, sa_family_t, u_int8_t,
+@@ -1658,6 +1686,8 @@ int	pflog_packet(struct pfi_kif *, struct mbuf *, sa_family_t, u_int8_t,
  	    struct pf_pdesc *);
  int	pf_match_addr(u_int8_t, struct pf_addr *, struct pf_addr *,
  	    struct pf_addr *, sa_family_t);
@@ -2511,7 +2512,7 @@ index 32e721c..52f550c 100644
  int	pf_match(u_int8_t, u_int32_t, u_int32_t, u_int32_t);
  int	pf_match_port(u_int8_t, u_int16_t, u_int16_t, u_int16_t);
  int	pf_match_uid(u_int8_t, uid_t, uid_t, uid_t);
-@@ -1685,6 +1715,8 @@ int	pf_socket_lookup(int, struct pf_pdesc *);
+@@ -1688,6 +1718,8 @@ int	pf_socket_lookup(int, struct pf_pdesc *);
  #endif
  void	pfr_initialize(void);
  int	pfr_match_addr(struct pfr_ktable *, struct pf_addr *, sa_family_t);
@@ -2545,15 +2546,15 @@ index ae7341e..65f18fe 100644
  
  #include <sys/cdefs.h>
 diff --git a/sys/net/if.h b/sys/net/if.h
-index 857ab7f..bf5c5c7 100644
+index f94b54a..c3bd460 100644
 --- a/sys/net/if.h
 +++ b/sys/net/if.h
-@@ -150,6 +150,8 @@ struct if_data {
- #define	IFF_MONITOR	0x40000		/* (n) user-requested monitor mode */
+@@ -151,6 +151,8 @@ struct if_data {
  #define	IFF_STATICARP	0x80000		/* (n) static ARP */
  #define	IFF_DYING	0x200000	/* (n) interface is winding down */
-+#define	IFF_L2FILTER	0x400000	/* (n) perform layer2 filtering */
-+#define	IFF_L2TAG	0x800000	/* (n) tag packets with layer2 header */
+ #define	IFF_RENAMING	0x400000	/* (n) interface is being renamed */
++#define	IFF_L2FILTER	0x800000	/* (n) perform layer2 filtering */
++#define	IFF_L2TAG	0x1000000	/* (n) tag packets with layer2 header */
  
  /*
   * Old names for driver flags so that user space tools can continue to use
@@ -3075,10 +3076,10 @@ index bac2044..18fc129 100644
  	case MOD_UNLOAD:
  		if_deregister_com_alloc(IFT_ETHER);
 diff --git a/sys/net/pfil.h b/sys/net/pfil.h
-index 48b1db8..aed6c06 100644
+index 6ac750a..78d74e9 100644
 --- a/sys/net/pfil.h
 +++ b/sys/net/pfil.h
-@@ -64,6 +64,7 @@ typedef	TAILQ_HEAD(pfil_list, packet_filter_hook) pfil_list_t;
+@@ -63,6 +63,7 @@ typedef	TAILQ_HEAD(pfil_list, packet_filter_hook) pfil_list_t;
  
  #define	PFIL_TYPE_AF		1	/* key is AF_* type */
  #define	PFIL_TYPE_IFNET		2	/* key is ifnet pointer */
@@ -3087,7 +3088,7 @@ index 48b1db8..aed6c06 100644
  struct pfil_head {
  	pfil_list_t	ph_in;
 diff --git a/sys/netinet/ip_fw.h b/sys/netinet/ip_fw.h
-index 9967a29..ab95b6f 100644
+index 1e6feb4..ecb7d8e 100644
 --- a/sys/netinet/ip_fw.h
 +++ b/sys/netinet/ip_fw.h
 @@ -95,8 +95,8 @@ enum ipfw_opcodes {		/* arguments (4 byte each)	*/
@@ -3239,10 +3240,96 @@ index 9967a29..ab95b6f 100644
  	uint32_t	id;		/* ruleset id */
  };
 diff --git a/sys/netinet/ipfw/ip_dummynet.c b/sys/netinet/ipfw/ip_dummynet.c
-index d562099..c8e5510 100644
+index e961a55..9f23c6b 100644
 --- a/sys/netinet/ipfw/ip_dummynet.c
 +++ b/sys/netinet/ipfw/ip_dummynet.c
-@@ -1061,7 +1061,8 @@ find_queue(struct dn_flow_set *fs, struct ipfw_flow_id *id)
+@@ -944,28 +944,49 @@ dummynet_send(struct mbuf *m)
+ 		m->m_nextpkt = NULL;
+ 		pkt = dn_tag_get(m);
+ 		switch (pkt->dn_dir) {
+-		case DN_TO_IP_OUT:
+-			ip_output(m, NULL, NULL, IP_FORWARDING, NULL, NULL);
++		case DN_TO_IP_OUT: {
++				VNET_ASSERT(pkt->ifp != NULL);
++				CURVNET_SET(pkt->ifp->if_vnet);
++				ip_output(m, NULL, NULL, IP_FORWARDING,
++				    NULL, NULL);
++				CURVNET_RESTORE();
++			}
+ 			break ;
+-		case DN_TO_IP_IN :
+-			ip = mtod(m, struct ip *);
+-			ip->ip_len = htons(ip->ip_len);
+-			ip->ip_off = htons(ip->ip_off);
+-			netisr_dispatch(NETISR_IP, m);
++		case DN_TO_IP_IN : {
++				VNET_ASSERT(m->m_pkthdr.rcvif != NULL);
++				CURVNET_SET(m->m_pkthdr.rcvif->if_vnet);
++				ip = mtod(m, struct ip *);
++				ip->ip_len = htons(ip->ip_len);
++				ip->ip_off = htons(ip->ip_off);
++				netisr_dispatch(NETISR_IP, m);
++				CURVNET_RESTORE();
++			}
+ 			break;
+ #ifdef INET6
+-		case DN_TO_IP6_IN:
+-			netisr_dispatch(NETISR_IPV6, m);
++		case DN_TO_IP6_IN: {
++				VNET_ASSERT(m->m_pkthdr.rcvif != NULL);
++				CURVNET_SET(m->m_pkthdr.rcvif->if_vnet);
++				netisr_dispatch(NETISR_IPV6, m);
++				CURVNET_RESTORE();
++			}
+ 			break;
+ 
+-		case DN_TO_IP6_OUT:
+-			ip6_output(m, NULL, NULL, IPV6_FORWARDING, NULL, NULL, NULL);
++		case DN_TO_IP6_OUT: {
++				VNET_ASSERT(pkt->ifp != NULL);
++				CURVNET_SET(pkt->ifp->if_vnet);
++				ip6_output(m, NULL, NULL, IPV6_FORWARDING,
++				    NULL, NULL, NULL);
++				CURVNET_RESTORE();
++			}
+ 			break;
+ #endif
+ 		case DN_TO_IFB_FWD:
+-			if (bridge_dn_p != NULL)
++			if (bridge_dn_p != NULL) {
++				VNET_ASSERT(pkt->ifp != NULL);
++				CURVNET_SET(pkt->ifp->if_vnet);
+ 				((*bridge_dn_p)(m, pkt->ifp));
+-			else
++				CURVNET_RESTORE();
++			} else
+ 				printf("dummynet: if_bridge not loaded\n");
+ 
+ 			break;
+@@ -981,10 +1002,19 @@ dummynet_send(struct mbuf *m)
+ 				    "dropping packet\n");
+ 				break;
+ 			}
+-			ether_demux(m->m_pkthdr.rcvif, m);
++			{
++				VNET_ASSERT(m->m_pkthdr.rcvif != NULL);
++				CURVNET_SET(m->m_pkthdr.rcvif->if_vnet);
++				ether_demux(m->m_pkthdr.rcvif, m);
++				CURVNET_RESTORE();
++			}
+ 			break;
+-		case DN_TO_ETH_OUT:
+-			ether_output_frame(pkt->ifp, m);
++		case DN_TO_ETH_OUT: {
++				VNET_ASSERT(pkt->ifp != NULL);
++				CURVNET_SET(pkt->ifp->if_vnet);
++				ether_output_frame(pkt->ifp, m);
++				CURVNET_RESTORE();
++			}
+ 			break;
+ 
+ 		case DN_TO_DROP:
+@@ -1072,7 +1102,8 @@ find_queue(struct dn_flow_set *fs, struct ipfw_flow_id *id)
  {
      int i = 0 ; /* we need i and q for new allocations */
      struct dn_flow_queue *q, *prev;
@@ -3252,9 +3339,11 @@ index d562099..c8e5510 100644
  
      if ( !(fs->flags_fs & DN_HAVE_FLOW_MASK) )
  	q = fs->rq[0] ;
-@@ -1071,7 +1072,8 @@ find_queue(struct dn_flow_set *fs, struct ipfw_flow_id *id)
+@@ -1081,8 +1112,10 @@ find_queue(struct dn_flow_set *fs, struct ipfw_flow_id *id)
+ 	id->dst_port &= fs->flow_mask.dst_port ;
  	id->src_port &= fs->flow_mask.src_port ;
  	id->proto &= fs->flow_mask.proto ;
++	id->tag &= fs->flow_mask.tag;
  	id->flags = 0 ; /* we don't care about this one */
 -	if (is_v6) {
 +	switch (id->flow_type) {
@@ -3262,7 +3351,7 @@ index d562099..c8e5510 100644
  	    APPLY_MASK(&id->dst_ip6, &fs->flow_mask.dst_ip6);
  	    APPLY_MASK(&id->src_ip6, &fs->flow_mask.src_ip6);
  	    id->flow_id6 &= fs->flow_mask.flow_id6;
-@@ -1099,7 +1101,8 @@ find_queue(struct dn_flow_set *fs, struct ipfw_flow_id *id)
+@@ -1110,7 +1143,8 @@ find_queue(struct dn_flow_set *fs, struct ipfw_flow_id *id)
  		(id->dst_port << 1) ^ (id->src_port) ^
  		(id->proto ) ^
  		(id->flow_id6);
@@ -3272,7 +3361,7 @@ index d562099..c8e5510 100644
  	    id->dst_ip &= fs->flow_mask.dst_ip ;
  	    id->src_ip &= fs->flow_mask.src_ip ;
  
-@@ -1109,13 +1112,42 @@ find_queue(struct dn_flow_set *fs, struct ipfw_flow_id *id)
+@@ -1120,28 +1154,64 @@ find_queue(struct dn_flow_set *fs, struct ipfw_flow_id *id)
  		( (id->src_ip >> 16 ) & 0xffff ) ^
  		(id->dst_port << 1) ^ (id->src_port) ^
  		(id->proto );
@@ -3299,7 +3388,6 @@ index d562099..c8e5510 100644
 +	    return NULL;
 +	}
 +	if (fs->flow_mask.tag) {
-+	    id->tag &= fs->flow_mask.tag;
 +	    i ^= id->tag;
  	}
  	i = i % fs->rq_size ;
@@ -3309,15 +3397,16 @@ index d562099..c8e5510 100644
  	    search_steps++;
 -	    if (is_v6 &&
 +
-+	    if (fs->flow_mask.tag && id->tag != q->id.tag)
-+		continue;
-+
 +	    if (id->flow_type == IPFW_FLOW_IP6 &&
  		    IN6_ARE_ADDR_EQUAL(&id->dst_ip6,&q->id.dst_ip6) &&  
  		    IN6_ARE_ADDR_EQUAL(&id->src_ip6,&q->id.src_ip6) &&  
  		    id->dst_port == q->id.dst_port &&
-@@ -1125,7 +1157,8 @@ find_queue(struct dn_flow_set *fs, struct ipfw_flow_id *id)
- 		    id->flow_id6 == q->id.flow_id6)
+ 		    id->src_port == q->id.src_port &&
+ 		    id->proto == q->id.proto &&
+ 		    id->flags == q->id.flags &&
+-		    id->flow_id6 == q->id.flow_id6)
++		    id->flow_id6 == q->id.flow_id6 &&
++		    id->tag == q->id.tag)
  		break ; /* found */
  
 -	    if (!is_v6 && id->dst_ip == q->id.dst_ip &&
@@ -3326,22 +3415,47 @@ index d562099..c8e5510 100644
  		    id->src_ip == q->id.src_ip &&
  		    id->dst_port == q->id.dst_port &&
  		    id->src_port == q->id.src_port &&
-@@ -1133,6 +1166,13 @@ find_queue(struct dn_flow_set *fs, struct ipfw_flow_id *id)
- 		    id->flags == q->id.flags)
- 		break ; /* found */
- 
+ 		    id->proto == q->id.proto &&
+-		    id->flags == q->id.flags)
++		    id->flags == q->id.flags &&
++		    id->tag == q->id.tag)
++		break ; /* found */
++
 +	    if (id->flow_type == IPFW_FLOW_ETHER &&
 +		    memcmp(id->src_ether.octet, q->id.src_ether.octet,
 +			    ETHER_ADDR_LEN) == 0 &&
 +		    memcmp(id->dst_ether.octet, q->id.dst_ether.octet,
-+			    ETHER_ADDR_LEN) == 0)
-+		break ; /* found */
-+
++			    ETHER_ADDR_LEN) == 0 &&
++		    id->tag == q->id.tag)
+ 		break ; /* found */
+ 
  	    /* No match. Check if we can expire the entry */
- 	    if (pipe_expire && q->head == NULL && q->S == q->F+1 ) {
- 		/* entry is idle and not in any heap, expire it */
+@@ -1511,8 +1581,7 @@ dummynet_io(struct mbuf **m0, int dir, struct ip_fw_args *fwa)
+ 		}
+ 	}
+ done:
+-	if (head == m && dir != DN_TO_IFB_FWD && dir != DN_TO_ETH_DEMUX &&
+-	    dir != DN_TO_ETH_OUT) {	/* Fast io. */
++	if (head == m) {	/* Fast io. */
+ 		io_pkt_fast++;
+ 		if (m->m_nextpkt != NULL)
+ 			printf("dummynet: fast io: pkt chain detected!\n");
+@@ -1521,8 +1590,12 @@ done:
+ 		*m0 = NULL;		/* Normal io. */
+ 
+ 	DUMMYNET_UNLOCK();
+-	if (head != NULL)
++	if (head != NULL) {
++		printf("dummynet fast io\n");
++		MPASS(dir != DN_TO_IFB_FWD && dir != DN_TO_ETH_DEMUX &&
++		    dir != DN_TO_ETH_OUT);
+ 		dummynet_send(head);
++	}
+ 	return (0);
+ 
+ dropit:
 diff --git a/sys/netinet/ipfw/ip_fw2.c b/sys/netinet/ipfw/ip_fw2.c
-index a17a647..fdb6a69 100644
+index 4c08bc5..2f13ec6 100644
 --- a/sys/netinet/ipfw/ip_fw2.c
 +++ b/sys/netinet/ipfw/ip_fw2.c
 @@ -57,6 +57,7 @@ __FBSDID("$FreeBSD$");
@@ -3360,7 +3474,7 @@ index a17a647..fdb6a69 100644
  #include <net/radix.h>
  #include <net/route.h>
  #include <net/pf_mtag.h>
-@@ -145,9 +147,48 @@ ipfw_nat_cfg_t *ipfw_nat_del_ptr;
+@@ -146,9 +148,48 @@ ipfw_nat_cfg_t *ipfw_nat_del_ptr;
  ipfw_nat_cfg_t *ipfw_nat_get_cfg_ptr;
  ipfw_nat_cfg_t *ipfw_nat_get_log_ptr;
  
@@ -3411,9 +3525,9 @@ index a17a647..fdb6a69 100644
  	u_int32_t		value;
  };
  
-@@ -763,18 +804,6 @@ send_reject6(struct ip_fw_args *args, int code, u_int hlen, struct ip6_hdr *ip6)
- 		 */
- 		tcp_respond(NULL, ip6, tcp, m, ack, seq, flags);
+@@ -728,18 +769,6 @@ send_reject6(struct ip_fw_args *args, int code, u_int hlen, struct ip6_hdr *ip6)
+ 		}
+ 		m_freem(m);
  	} else if (code != ICMP6_UNREACH_RST) { /* Send an ICMPv6 unreach. */
 -#if 0
 -		/*
@@ -3430,7 +3544,7 @@ index a17a647..fdb6a69 100644
  		icmp6_error(m, ICMP6_DST_UNREACH, code, 0);
  	} else
  		m_freem(m);
-@@ -800,7 +829,6 @@ ipfw_log(struct ip_fw *f, u_int hlen, struct ip_fw_args *args,
+@@ -765,7 +794,6 @@ ipfw_log(struct ip_fw *f, u_int hlen, struct ip_fw_args *args,
      struct mbuf *m, struct ifnet *oif, u_short offset, uint32_t tablearg,
      struct ip *ip)
  {
@@ -3438,7 +3552,7 @@ index a17a647..fdb6a69 100644
  	char *action;
  	int limit_reached = 0;
  	char action2[40], proto[128], fragment[32];
-@@ -930,23 +958,24 @@ ipfw_log(struct ip_fw *f, u_int hlen, struct ip_fw_args *args,
+@@ -895,7 +923,7 @@ ipfw_log(struct ip_fw *f, u_int hlen, struct ip_fw_args *args,
  	}
  
  	if (hlen == 0) {	/* non-ip */
@@ -3447,7 +3561,9 @@ index a17a647..fdb6a69 100644
  
  	} else {
  		int len;
- 		char src[48], dst[48];
+@@ -905,17 +933,18 @@ ipfw_log(struct ip_fw *f, u_int hlen, struct ip_fw_args *args,
+ 		char src[INET_ADDRSTRLEN], dst[INET_ADDRSTRLEN];
+ #endif
  		struct icmphdr *icmp;
 -		struct tcphdr *tcp;
 -		struct udphdr *udp;
@@ -3468,7 +3584,7 @@ index a17a647..fdb6a69 100644
  			snprintf(src, sizeof(src), "[%s]",
  			    ip6_sprintf(ip6buf, &args->f_id.src_ip6));
  			snprintf(dst, sizeof(dst), "[%s]",
-@@ -955,14 +984,27 @@ ipfw_log(struct ip_fw *f, u_int hlen, struct ip_fw_args *args,
+@@ -924,14 +953,27 @@ ipfw_log(struct ip_fw *f, u_int hlen, struct ip_fw_args *args,
  			ip6 = (struct ip6_hdr *)ip;
  			tcp = (struct tcphdr *)(((char *)ip) + hlen);
  			udp = (struct udphdr *)(((char *)ip) + hlen);
@@ -3498,7 +3614,7 @@ index a17a647..fdb6a69 100644
  		}
  
  		switch (args->f_id.proto) {
-@@ -1020,7 +1062,7 @@ ipfw_log(struct ip_fw *f, u_int hlen, struct ip_fw_args *args,
+@@ -989,7 +1031,7 @@ ipfw_log(struct ip_fw *f, u_int hlen, struct ip_fw_args *args,
  		}
  
  #ifdef INET6
@@ -3507,7 +3623,7 @@ index a17a647..fdb6a69 100644
  			if (offset & (IP6F_OFF_MASK | IP6F_MORE_FRAG))
  				snprintf(SNPARGS(fragment, 0),
  				    " (frag %08x:%d@%d%s)",
-@@ -1030,15 +1072,10 @@ ipfw_log(struct ip_fw *f, u_int hlen, struct ip_fw_args *args,
+@@ -999,15 +1041,10 @@ ipfw_log(struct ip_fw *f, u_int hlen, struct ip_fw_args *args,
  				    (offset & IP6F_MORE_FRAG) ? "+" : "");
  		} else
  #endif
@@ -3526,7 +3642,7 @@ index a17a647..fdb6a69 100644
  			if (ip_off & (IP_MF | IP_OFFMASK))
  				snprintf(SNPARGS(fragment, 0),
  				    " (frag %d:%d@%d%s)",
-@@ -1076,7 +1113,7 @@ hash_packet(struct ipfw_flow_id *id)
+@@ -1045,7 +1082,7 @@ hash_packet(struct ipfw_flow_id *id)
  	u_int32_t i;
  
  #ifdef INET6
@@ -3535,7 +3651,16 @@ index a17a647..fdb6a69 100644
  		i = hash_packet6(id);
  	else
  #endif /* INET6 */
-@@ -1219,7 +1256,7 @@ lookup_dyn_rule_locked(struct ipfw_flow_id *pkt, int *match_direction,
+@@ -1065,7 +1102,7 @@ unlink_dyn_rule_print(struct ipfw_flow_id *id)
+ #endif
+ 
+ #ifdef INET6
+-	if (IS_IP6_FLOW_ID(id)) {
++	if (id->flow_type == IPFW_FLOW_IP6) {
+ 		ip6_sprintf(src, &id->src_ip6);
+ 		ip6_sprintf(dst, &id->dst_ip6);
+ 	} else
+@@ -1212,7 +1249,7 @@ lookup_dyn_rule_locked(struct ipfw_flow_id *pkt, int *match_direction,
  		}
  		if (pkt->proto == q->id.proto &&
  		    q->dyn_type != O_LIMIT_PARENT) {
@@ -3544,7 +3669,7 @@ index a17a647..fdb6a69 100644
  			    if (IN6_ARE_ADDR_EQUAL(&(pkt->src_ip6),
  				&(q->id.src_ip6)) &&
  			    IN6_ARE_ADDR_EQUAL(&(pkt->dst_ip6),
-@@ -1238,7 +1275,7 @@ lookup_dyn_rule_locked(struct ipfw_flow_id *pkt, int *match_direction,
+@@ -1231,7 +1268,7 @@ lookup_dyn_rule_locked(struct ipfw_flow_id *pkt, int *match_direction,
  				    dir = MATCH_REVERSE;
  				    break;
  			    }
@@ -3553,7 +3678,7 @@ index a17a647..fdb6a69 100644
  			    if (pkt->src_ip == q->id.src_ip &&
  				pkt->dst_ip == q->id.dst_ip &&
  				pkt->src_port == q->id.src_port &&
-@@ -1262,7 +1299,21 @@ next:
+@@ -1255,7 +1292,21 @@ next:
  	if (q == NULL)
  		goto done; /* q = NULL, not found */
  
@@ -3576,7 +3701,7 @@ index a17a647..fdb6a69 100644
  		prev->next = q->next;
  		q->next = V_ipfw_dyn_v[i];
  		V_ipfw_dyn_v[i] = q;
-@@ -1339,6 +1390,13 @@ lookup_dyn_rule(struct ipfw_flow_id *pkt, int *match_direction,
+@@ -1332,6 +1383,13 @@ lookup_dyn_rule(struct ipfw_flow_id *pkt, int *match_direction,
  {
  	ipfw_dyn_rule *q;
  
@@ -3590,7 +3715,7 @@ index a17a647..fdb6a69 100644
  	IPFW_DYN_LOCK();
  	q = lookup_dyn_rule_locked(pkt, match_direction, tcp);
  	if (q == NULL)
-@@ -1387,7 +1445,8 @@ realloc_dynamic_table(void)
+@@ -1380,7 +1438,8 @@ realloc_dynamic_table(void)
   * - "parent" rules for the above (O_LIMIT_PARENT).
   */
  static ipfw_dyn_rule *
@@ -3600,7 +3725,7 @@ index a17a647..fdb6a69 100644
  {
  	ipfw_dyn_rule *r;
  	int i;
-@@ -1419,6 +1478,10 @@ add_dyn_rule(struct ipfw_flow_id *id, u_int8_t dyn_type, struct ip_fw *rule)
+@@ -1412,6 +1471,10 @@ add_dyn_rule(struct ipfw_flow_id *id, u_int8_t dyn_type, struct ip_fw *rule)
  	}
  
  	r->id = *id;
@@ -3611,7 +3736,16 @@ index a17a647..fdb6a69 100644
  	r->expire = time_uptime + V_dyn_syn_lifetime;
  	r->rule = rule;
  	r->dyn_type = dyn_type;
-@@ -1442,7 +1505,8 @@ add_dyn_rule(struct ipfw_flow_id *id, u_int8_t dyn_type, struct ip_fw *rule)
+@@ -1433,7 +1496,7 @@ add_dyn_rule(struct ipfw_flow_id *id, u_int8_t dyn_type, struct ip_fw *rule)
+ #endif
+ 
+ #ifdef INET6
+-		if (IS_IP6_FLOW_ID(&(r->id))) {
++		if (r->id.flow_type == IPFW_FLOW_IP6) {
+ 			ip6_sprintf(src, &r->id.src_ip6);
+ 			ip6_sprintf(dst, &r->id.dst_ip6);
+ 		} else
+@@ -1456,7 +1519,8 @@ add_dyn_rule(struct ipfw_flow_id *id, u_int8_t dyn_type, struct ip_fw *rule)
   * If the lookup fails, then install one.
   */
  static ipfw_dyn_rule *
@@ -3621,7 +3755,7 @@ index a17a647..fdb6a69 100644
  {
  	ipfw_dyn_rule *q;
  	int i;
-@@ -1450,7 +1514,7 @@ lookup_dyn_parent(struct ipfw_flow_id *pkt, struct ip_fw *rule)
+@@ -1464,7 +1528,7 @@ lookup_dyn_parent(struct ipfw_flow_id *pkt, struct ip_fw *rule)
  	IPFW_DYN_LOCK_ASSERT();
  
  	if (V_ipfw_dyn_v) {
@@ -3630,7 +3764,7 @@ index a17a647..fdb6a69 100644
  		i = hash_packet( pkt );
  		for (q = V_ipfw_dyn_v[i] ; q != NULL ; q=q->next)
  			if (q->dyn_type == O_LIMIT_PARENT &&
-@@ -1474,7 +1538,7 @@ lookup_dyn_parent(struct ipfw_flow_id *pkt, struct ip_fw *rule)
+@@ -1488,7 +1552,7 @@ lookup_dyn_parent(struct ipfw_flow_id *pkt, struct ip_fw *rule)
  				return q;
  			}
  	}
@@ -3639,7 +3773,7 @@ index a17a647..fdb6a69 100644
  }
  
  /**
-@@ -1484,7 +1548,7 @@ lookup_dyn_parent(struct ipfw_flow_id *pkt, struct ip_fw *rule)
+@@ -1498,7 +1562,7 @@ lookup_dyn_parent(struct ipfw_flow_id *pkt, struct ip_fw *rule)
   * session limitations are enforced.
   */
  static int
@@ -3648,9 +3782,9 @@ index a17a647..fdb6a69 100644
      struct ip_fw_args *args, uint32_t tablearg)
  {
  	static int last_log;
-@@ -1492,6 +1556,13 @@ install_state(struct ip_fw *rule, ipfw_insn_limit *cmd,
- 	struct in_addr da;
- 	char src[48], dst[48];
+@@ -1510,6 +1574,13 @@ install_state(struct ip_fw *rule, ipfw_insn_limit *cmd,
+ 	char src[INET_ADDRSTRLEN], dst[INET_ADDRSTRLEN];
+ #endif
  
 +	if (args->f_id.flow_type != IPFW_FLOW_IP4 &&
 +			args->f_id.flow_type != IPFW_FLOW_IP6) {
@@ -3662,7 +3796,16 @@ index a17a647..fdb6a69 100644
  	src[0] = '\0';
  	dst[0] = '\0';
  
-@@ -1531,7 +1602,7 @@ install_state(struct ip_fw *rule, ipfw_insn_limit *cmd,
+@@ -1517,7 +1588,7 @@ install_state(struct ip_fw *rule, ipfw_insn_limit *cmd,
+ 
+ 	DEB(
+ #ifdef INET6
+-	if (IS_IP6_FLOW_ID(&(args->f_id))) {
++	if (args->f_id.flow_type == IPFW_FLOW_IP6) {
+ 		ip6_sprintf(src, &args->f_id.src_ip6);
+ 		ip6_sprintf(dst, &args->f_id.dst_ip6);
+ 	} else
+@@ -1562,7 +1633,7 @@ install_state(struct ip_fw *rule, ipfw_insn_limit *cmd,
  
  	switch (cmd->o.opcode) {
  	case O_KEEP_STATE:	/* bidir rule */
@@ -3671,7 +3814,7 @@ index a17a647..fdb6a69 100644
  		break;
  
  	case O_LIMIT: {		/* limit number of sessions */
-@@ -1554,10 +1625,10 @@ install_state(struct ip_fw *rule, ipfw_insn_limit *cmd,
+@@ -1585,10 +1656,10 @@ install_state(struct ip_fw *rule, ipfw_insn_limit *cmd,
  
  		id.dst_ip = id.src_ip = id.dst_port = id.src_port = 0;
  		id.proto = args->f_id.proto;
@@ -3684,7 +3827,7 @@ index a17a647..fdb6a69 100644
  			if (limit_mask & DYN_SRC_ADDR)
  				id.src_ip6 = args->f_id.src_ip6;
  			if (limit_mask & DYN_DST_ADDR)
-@@ -1572,7 +1643,7 @@ install_state(struct ip_fw *rule, ipfw_insn_limit *cmd,
+@@ -1603,7 +1674,7 @@ install_state(struct ip_fw *rule, ipfw_insn_limit *cmd,
  			id.src_port = args->f_id.src_port;
  		if (limit_mask & DYN_DST_PORT)
  			id.dst_port = args->f_id.dst_port;
@@ -3693,7 +3836,7 @@ index a17a647..fdb6a69 100644
  			printf("ipfw: %s: add parent failed\n", __func__);
  			IPFW_DYN_UNLOCK();
  			return (1);
-@@ -1589,7 +1660,8 @@ install_state(struct ip_fw *rule, ipfw_insn_limit *cmd,
+@@ -1620,7 +1691,8 @@ install_state(struct ip_fw *rule, ipfw_insn_limit *cmd,
  					 * XXX IPv6 flows are not
  					 * supported yet.
  					 */
@@ -3703,7 +3846,7 @@ index a17a647..fdb6a69 100644
  						char ip6buf[INET6_ADDRSTRLEN];
  						snprintf(src, sizeof(src),
  						    "[%s]", ip6_sprintf(ip6buf,
-@@ -1619,7 +1691,8 @@ install_state(struct ip_fw *rule, ipfw_insn_limit *cmd,
+@@ -1650,7 +1722,8 @@ install_state(struct ip_fw *rule, ipfw_insn_limit *cmd,
  				return (1);
  			}
  		}
@@ -3713,7 +3856,63 @@ index a17a647..fdb6a69 100644
  		break;
  	}
  	default:
-@@ -1738,22 +1811,7 @@ static void
+@@ -1701,12 +1774,12 @@ send_pkt(struct mbuf *replyto, struct ipfw_flow_id *id, u_int32_t seq,
+ 	(void)replyto;		/* don't warn about unused arg */
+ #endif
+ 
+-	switch (id->addr_type) {
+-	case 4:
++	switch (id->flow_type) {
++	case IPFW_FLOW_IP4:
+ 		len = sizeof(struct ip) + sizeof(struct tcphdr);
+ 		break;
+ #ifdef INET6
+-	case 6:
++	case IPFW_FLOW_IP6:
+ 		len = sizeof(struct ip6_hdr) + sizeof(struct tcphdr);
+ 		break;
+ #endif
+@@ -1723,8 +1796,8 @@ send_pkt(struct mbuf *replyto, struct ipfw_flow_id *id, u_int32_t seq,
+ 	m->m_pkthdr.rcvif = NULL;
+ 	bzero(m->m_data, len);
+ 
+-	switch (id->addr_type) {
+-	case 4:
++	switch (id->flow_type) {
++	case IPFW_FLOW_IP4:
+ 		h = mtod(m, struct ip *);
+ 
+ 		/* prepare for checksum */
+@@ -1741,7 +1814,7 @@ send_pkt(struct mbuf *replyto, struct ipfw_flow_id *id, u_int32_t seq,
+ 		th = (struct tcphdr *)(h + 1);
+ 		break;
+ #ifdef INET6
+-	case 6:
++	case IPFW_FLOW_IP6:
+ 		h6 = mtod(m, struct ip6_hdr *);
+ 
+ 		/* prepare for checksum */
+@@ -1788,8 +1861,8 @@ send_pkt(struct mbuf *replyto, struct ipfw_flow_id *id, u_int32_t seq,
+ 		th->th_flags = TH_ACK;
+ 	}
+ 
+-	switch (id->addr_type) {
+-	case 4:
++	switch (id->flow_type) {
++	case IPFW_FLOW_IP4:
+ 		th->th_sum = in_cksum(m, len);
+ 
+ 		/* finish the ip header */
+@@ -1802,7 +1875,7 @@ send_pkt(struct mbuf *replyto, struct ipfw_flow_id *id, u_int32_t seq,
+ 		h->ip_sum = 0;
+ 		break;
+ #ifdef INET6
+-	case 6:
++	case IPFW_FLOW_IP6:
+ 		th->th_sum = in6_cksum(m, IPPROTO_TCP, sizeof(*h6),
+ 		    sizeof(struct tcphdr));
+ 
+@@ -1823,22 +1896,7 @@ static void
  send_reject(struct ip_fw_args *args, int code, int ip_len, struct ip *ip)
  {
  
@@ -3736,7 +3935,7 @@ index a17a647..fdb6a69 100644
  		icmp_error(args->m, ICMP_UNREACH, code, 0L, 0);
  	} else if (args->f_id.proto == IPPROTO_TCP) {
  		struct tcphdr *const tcp =
-@@ -1820,85 +1878,154 @@ lookup_next_rule(struct ip_fw *me, u_int32_t tablearg)
+@@ -1905,85 +1963,154 @@ lookup_next_rule(struct ip_fw *me, u_int32_t tablearg)
  	return rule;
  }
  
@@ -3807,8 +4006,9 @@ index a17a647..fdb6a69 100644
  	if (tbl >= IPFW_TABLES_MAX)
  		return (EINVAL);
 -	rnh = ch->tables[tbl];
+-	ent = malloc(sizeof(*ent), M_IPFW_TBL, M_NOWAIT | M_ZERO);
 +	th = &ch->tables[tbl];
- 	ent = malloc(sizeof(*ent), M_IPFW_TBL, M_NOWAIT | M_ZERO);
++	ent = malloc(sizeof(*ent), M_IPFW_TBL, M_WAITOK | M_ZERO);
  	if (ent == NULL)
  		return (ENOMEM);
 +	refcount_init(&ent->refcnt, 1);
@@ -3927,7 +4127,7 @@ index a17a647..fdb6a69 100644
  	return (0);
  }
  
-@@ -1920,7 +2047,12 @@ init_tables(struct ip_fw_chain *ch)
+@@ -2005,7 +2132,12 @@ init_tables(struct ip_fw_chain *ch)
  	uint16_t j;
  
  	for (i = 0; i < IPFW_TABLES_MAX; i++) {
@@ -3941,7 +4141,7 @@ index a17a647..fdb6a69 100644
  			for (j = 0; j < i; j++) {
  				(void) flush_table(ch, j);
  			}
-@@ -1932,18 +2064,37 @@ init_tables(struct ip_fw_chain *ch)
+@@ -2017,18 +2149,37 @@ init_tables(struct ip_fw_chain *ch)
  
  static int
  lookup_table(struct ip_fw_chain *ch, uint16_t tbl, in_addr_t addr,
@@ -3987,7 +4187,7 @@ index a17a647..fdb6a69 100644
  	if (ent != NULL) {
  		*val = ent->value;
  		return (1);
-@@ -1963,20 +2114,20 @@ count_table_entry(struct radix_node *rn, void *arg)
+@@ -2048,20 +2199,20 @@ count_table_entry(struct radix_node *rn, void *arg)
  static int
  count_table(struct ip_fw_chain *ch, uint32_t tbl, uint32_t *cnt)
  {
@@ -4012,7 +4212,7 @@ index a17a647..fdb6a69 100644
  	ipfw_table * const tbl = arg;
  	ipfw_table_entry *ent;
  
-@@ -1984,11 +2135,24 @@ dump_table_entry(struct radix_node *rn, void *arg)
+@@ -2069,11 +2220,24 @@ dump_table_entry(struct radix_node *rn, void *arg)
  		return (1);
  	ent = &tbl->ent[tbl->cnt];
  	ent->tbl = tbl->tbl;
@@ -4040,7 +4240,7 @@ index a17a647..fdb6a69 100644
  	ent->value = n->value;
  	tbl->cnt++;
  	return (0);
-@@ -1997,13 +2161,13 @@ dump_table_entry(struct radix_node *rn, void *arg)
+@@ -2082,13 +2246,13 @@ dump_table_entry(struct radix_node *rn, void *arg)
  static int
  dump_table(struct ip_fw_chain *ch, ipfw_table *tbl)
  {
@@ -4057,7 +4257,7 @@ index a17a647..fdb6a69 100644
  	return (0);
  }
  
-@@ -2092,10 +2256,9 @@ check_uidgid(ipfw_insn_u32 *insn, int proto, struct ifnet *oif,
+@@ -2177,10 +2341,9 @@ check_uidgid(ipfw_insn_u32 *insn, int proto, struct ifnet *oif,
   * Parameters:
   *
   *	args->m	(in/out) The packet; we set to NULL when/if we nuke it.
@@ -4071,7 +4271,7 @@ index a17a647..fdb6a69 100644
   *	args->oif	Outgoing interface, or NULL if packet is incoming.
   *		The incoming interface is in the mbuf. (in)
   *	args->divert_rule (in/out)
-@@ -2106,6 +2269,7 @@ check_uidgid(ipfw_insn_u32 *insn, int proto, struct ifnet *oif,
+@@ -2191,6 +2354,7 @@ check_uidgid(ipfw_insn_u32 *insn, int proto, struct ifnet *oif,
   *	args->next_hop	Socket we are forwarding to (out).
   *	args->f_id	Addresses grabbed from the packet (out)
   * 	args->cookie	a cookie depending on rule action
@@ -4079,7 +4279,7 @@ index a17a647..fdb6a69 100644
   *
   * Return value:
   *
-@@ -2130,10 +2294,8 @@ ipfw_chk(struct ip_fw_args *args)
+@@ -2215,10 +2379,8 @@ ipfw_chk(struct ip_fw_args *args)
  	 * the implementation of the various instructions to make sure
  	 * that they still work.
  	 *
@@ -4091,7 +4291,7 @@ index a17a647..fdb6a69 100644
  	 *
  	 * m | args->m	Pointer to the mbuf, as received from the caller.
  	 *	It may change if ipfw_chk() does an m_pullup, or if it
-@@ -2141,12 +2303,10 @@ ipfw_chk(struct ip_fw_args *args)
+@@ -2226,12 +2388,10 @@ ipfw_chk(struct ip_fw_args *args)
  	 *	XXX This has to change, so that ipfw_chk() never modifies
  	 *	or consumes the buffer.
  	 * ip	is the beginning of the ip(4 or 6) header.
@@ -4105,7 +4305,7 @@ index a17a647..fdb6a69 100644
  
  	/*
  	 * For rules which contain uid/gid or jail constraints, cache
-@@ -2242,6 +2402,9 @@ ipfw_chk(struct ip_fw_args *args)
+@@ -2327,6 +2487,9 @@ ipfw_chk(struct ip_fw_args *args)
  	if (m->m_flags & M_SKIP_FIREWALL || (! V_ipfw_vnet_ready))
  		return (IP_FW_PASS);	/* accept */
  
@@ -4113,9 +4313,9 @@ index a17a647..fdb6a69 100644
 +		ip = mtod(m, struct ip *);
 +
  	dst_ip.s_addr = 0;		/* make sure it is initialized */
+ 	src_ip.s_addr = 0;		/* make sure it is initialized */
  	pktlen = m->m_pkthdr.len;
- 	args->f_id.fib = M_GETFIB(m); /* note mbuf not altered) */
-@@ -2268,15 +2431,25 @@ do {									\
+@@ -2354,15 +2517,25 @@ do {									\
  	/*
  	 * if we have an ether header,
  	 */
@@ -4144,7 +4344,7 @@ index a17a647..fdb6a69 100644
  		hlen = sizeof(struct ip6_hdr);
  		proto = ip6->ip6_nxt;
  
-@@ -2438,10 +2611,10 @@ do {									\
+@@ -2524,10 +2697,10 @@ do {									\
  		args->f_id.dst_ip = 0;
  		args->f_id.flow_id6 = ntohl(ip6->ip6_flow);
  	} else if (pktlen >= sizeof(struct ip) &&
@@ -4157,7 +4357,7 @@ index a17a647..fdb6a69 100644
  
  		/*
  		 * Collect parameters into local variables for faster matching.
-@@ -2449,13 +2622,8 @@ do {									\
+@@ -2535,13 +2708,8 @@ do {									\
  		proto = ip->ip_p;
  		src_ip = ip->ip_src;
  		dst_ip = ip->ip_dst;
@@ -4173,7 +4373,7 @@ index a17a647..fdb6a69 100644
  		pktlen = ip_len < pktlen ? ip_len : pktlen;
  
  		if (offset == 0) {
-@@ -2486,6 +2654,14 @@ do {									\
+@@ -2572,6 +2740,14 @@ do {									\
  		ip = mtod(m, struct ip *);
  		args->f_id.src_ip = ntohl(src_ip.s_addr);
  		args->f_id.dst_ip = ntohl(dst_ip.s_addr);
@@ -4188,7 +4388,7 @@ index a17a647..fdb6a69 100644
  	}
  #undef PULLUP_TO
  	if (proto) { /* we may have port numbers, store them */
-@@ -2524,7 +2700,7 @@ do {									\
+@@ -2610,7 +2786,7 @@ do {									\
  		int skipto = mtag ? divert_cookie(mtag) : 0;
  
  		f = chain->rules;
@@ -4197,7 +4397,7 @@ index a17a647..fdb6a69 100644
  			if (skipto >= IPFW_DEFAULT_RULE) {
  				IPFW_RUNLOCK(chain);
  				return (IP_FW_DENY); /* invalid */
-@@ -2550,6 +2726,7 @@ do {									\
+@@ -2636,6 +2812,7 @@ do {									\
  	for (; f; f = f->next) {
  		ipfw_insn *cmd;
  		uint32_t tablearg = 0;
@@ -4205,7 +4405,7 @@ index a17a647..fdb6a69 100644
  		int l, cmdlen, skip_or; /* skip rest of OR block */
  
  again:
-@@ -2595,11 +2772,6 @@ check_body:
+@@ -2681,11 +2858,6 @@ check_body:
  				match = 1;
  				break;
  
@@ -4217,7 +4417,7 @@ index a17a647..fdb6a69 100644
  			case O_GID:
  			case O_UID:
  			case O_JAIL:
-@@ -2636,22 +2808,19 @@ check_body:
+@@ -2722,22 +2894,19 @@ check_body:
  				    m->m_pkthdr.rcvif, (ipfw_insn_if *)cmd);
  				break;
  
@@ -4250,7 +4450,7 @@ index a17a647..fdb6a69 100644
  				if (args->eh != NULL) {
  					u_int16_t *p =
  					    ((ipfw_insn_u16 *)cmd)->ports;
-@@ -2673,7 +2842,7 @@ check_body:
+@@ -2759,7 +2928,7 @@ check_body:
  				break;
  
  			case O_LAYER2:
@@ -4259,7 +4459,7 @@ index a17a647..fdb6a69 100644
  				break;
  
  			case O_DIVERTED:
-@@ -2699,14 +2868,24 @@ check_body:
+@@ -2785,14 +2954,24 @@ check_body:
  
  			case O_IP_SRC_LOOKUP:
  			case O_IP_DST_LOOKUP:
@@ -4289,7 +4489,7 @@ index a17a647..fdb6a69 100644
  				    if (!match)
  					break;
  				    if (cmdlen == F_INSN_SIZE(ipfw_insn_u32))
-@@ -3082,12 +3261,16 @@ check_body:
+@@ -3168,12 +3347,16 @@ check_body:
  				 * push it into mbuf.
  				 */
  				if (cmd->len & F_NOT) { /* `untag' action */
@@ -4308,7 +4508,7 @@ index a17a647..fdb6a69 100644
  				}
  				match = (cmd->len & F_NOT) ? 0: 1;
  				break;
-@@ -3098,13 +3281,117 @@ check_body:
+@@ -3184,13 +3367,117 @@ check_body:
  					match = 1;
  				break;
  
@@ -4428,7 +4628,7 @@ index a17a647..fdb6a69 100644
  					break;
  				}
  
-@@ -3124,7 +3411,10 @@ check_body:
+@@ -3210,7 +3497,10 @@ check_body:
  						match =
  						    mtag->m_tag_id >= p[0] &&
  						    mtag->m_tag_id <= p[1];
@@ -4439,7 +4639,7 @@ index a17a647..fdb6a69 100644
  				break;
  			}
  				
-@@ -3171,7 +3461,7 @@ check_body:
+@@ -3257,7 +3547,7 @@ check_body:
  			 */
  			case O_LIMIT:
  			case O_KEEP_STATE:
@@ -4448,7 +4648,7 @@ index a17a647..fdb6a69 100644
  				    (ipfw_insn_limit *)cmd, args, tablearg)) {
  					retval = IP_FW_DENY;
  					goto done; /* error/limit violation */
-@@ -3238,8 +3528,8 @@ check_body:
+@@ -3324,8 +3614,8 @@ check_body:
  			case O_TEE: {
  				struct divert_tag *dt;
  
@@ -4459,7 +4659,7 @@ index a17a647..fdb6a69 100644
  				mtag = m_tag_get(PACKET_TAG_DIVERT,
  						sizeof(struct divert_tag),
  						M_NOWAIT);
-@@ -3316,8 +3606,8 @@ check_body:
+@@ -3402,8 +3692,8 @@ check_body:
  			case O_FORWARD_IP: {
  				struct sockaddr_in *sa;
  				sa = &(((ipfw_insn_sa *)cmd)->sa);
@@ -4470,7 +4670,7 @@ index a17a647..fdb6a69 100644
  				if (!q || dyn_dir == MATCH_FORWARD) {
  					if (sa->sin_addr.s_addr == INADDR_ANY) {
  						bcopy(sa, &args->hopstore,
-@@ -3926,6 +4216,7 @@ check_ipfw_struct(struct ip_fw *rule, int size)
+@@ -4012,6 +4302,7 @@ check_ipfw_struct(struct ip_fw *rule, int size)
  #endif
  		case O_IP4:
  		case O_TAG:
@@ -4478,7 +4678,7 @@ index a17a647..fdb6a69 100644
  			if (cmdlen != F_INSN_SIZE(ipfw_insn))
  				goto bad_size;
  			break;
-@@ -3998,6 +4289,8 @@ check_ipfw_struct(struct ip_fw *rule, int size)
+@@ -4084,6 +4375,8 @@ check_ipfw_struct(struct ip_fw *rule, int size)
  
  		case O_IP_SRC_LOOKUP:
  		case O_IP_DST_LOOKUP:
@@ -4487,7 +4687,7 @@ index a17a647..fdb6a69 100644
  			if (cmd->arg1 >= IPFW_TABLES_MAX) {
  				printf("ipfw: invalid table number %d\n",
  				    cmd->arg1);
-@@ -4008,8 +4301,9 @@ check_ipfw_struct(struct ip_fw *rule, int size)
+@@ -4094,8 +4387,9 @@ check_ipfw_struct(struct ip_fw *rule, int size)
  				goto bad_size;
  			break;
  
@@ -4499,7 +4699,7 @@ index a17a647..fdb6a69 100644
  				goto bad_size;
  			break;
  
-@@ -4023,9 +4317,10 @@ check_ipfw_struct(struct ip_fw *rule, int size)
+@@ -4109,9 +4403,10 @@ check_ipfw_struct(struct ip_fw *rule, int size)
  				goto bad_size;
  			break;
  
@@ -4511,7 +4711,7 @@ index a17a647..fdb6a69 100644
  			if (cmdlen < 2 || cmdlen > 31)
  				goto bad_size;
  			break;
-@@ -4075,7 +4370,6 @@ check_ipfw_struct(struct ip_fw *rule, int size)
+@@ -4161,7 +4456,6 @@ check_ipfw_struct(struct ip_fw *rule, int size)
  			if (cmdlen != F_INSN_SIZE(ipfw_insn_nat))
   				goto bad_size;		
   			goto check_action;
@@ -4519,7 +4719,7 @@ index a17a647..fdb6a69 100644
  		case O_CHECK_STATE:
  		case O_COUNT:
  		case O_ACCEPT:
-@@ -4392,7 +4686,7 @@ ipfw_ctl(struct sockopt *sopt)
+@@ -4478,7 +4772,7 @@ ipfw_ctl(struct sockopt *sopt)
  			if (error)
  				break;
  			error = add_table_entry(&V_layer3_chain, ent.tbl,
@@ -4528,7 +4728,7 @@ index a17a647..fdb6a69 100644
  		}
  		break;
  
-@@ -4405,7 +4699,7 @@ ipfw_ctl(struct sockopt *sopt)
+@@ -4491,7 +4785,7 @@ ipfw_ctl(struct sockopt *sopt)
  			if (error)
  				break;
  			error = del_table_entry(&V_layer3_chain, ent.tbl,
@@ -4537,8 +4737,28 @@ index a17a647..fdb6a69 100644
  		}
  		break;
  
+@@ -4657,8 +4951,8 @@ ipfw_tick(void * vnetx)
+ 			mnext = send_pkt(NULL, &(q->id), q->ack_fwd - 1,
+ 				q->ack_rev, 0);
+ 
+-			switch (q->id.addr_type) {
+-			case 4:
++			switch (q->id.flow_type) {
++			case IPFW_FLOW_IP4:
+ 				if (m != NULL) {
+ 					*mtailp = m;
+ 					mtailp = &(*mtailp)->m_nextpkt;
+@@ -4669,7 +4963,7 @@ ipfw_tick(void * vnetx)
+ 				}
+ 				break;
+ #ifdef INET6
+-			case 6:
++			case IPFW_FLOW_IP6:
+ 				if (m != NULL) {
+ 					*m6_tailp = m;
+ 					m6_tailp = &(*m6_tailp)->m_nextpkt;
 diff --git a/sys/netinet/ipfw/ip_fw_pfil.c b/sys/netinet/ipfw/ip_fw_pfil.c
-index ffffb59..c30a2e2 100644
+index ffffb59..1a6bdf6 100644
 --- a/sys/netinet/ipfw/ip_fw_pfil.c
 +++ b/sys/netinet/ipfw/ip_fw_pfil.c
 @@ -51,6 +51,7 @@ __FBSDID("$FreeBSD$");
@@ -4597,7 +4817,7 @@ index ffffb59..c30a2e2 100644
  again:
  	dn_tag = m_tag_find(*m0, PACKET_TAG_DUMMYNET, NULL);
  	if (dn_tag != NULL) {
-@@ -442,19 +456,132 @@ nodivert:
+@@ -442,19 +456,145 @@ nodivert:
  	return 1;
  }
  
@@ -4605,22 +4825,29 @@ index ffffb59..c30a2e2 100644
 +ipfw_ether_check_init(struct ip_fw_args *args, struct mbuf **m0,
 +    struct ifnet *ifp, int dir, struct inpcb *inp)
 +{
-+	struct dn_pkt_tag *dn_tag;
++	struct m_tag *dn_tag;
++	struct dn_pkt_tag *dt;
 +
 +	bzero(args, sizeof(*args));
 +	args->m = *m0;
 +	args->flags = IP_FW_ARGS_LAYER2;
 +	args->eh = mtod(*m0, struct ether_header *);
 +	args->inp = inp;
++	if (dir == PFIL_OUT)
++		args->oif = ifp;
 +
-+	dn_tag = ip_dn_claim_tag(*m0);
++	dn_tag = m_tag_find(*m0, PACKET_TAG_DUMMYNET, NULL);
 +	if (dn_tag != NULL) {
-+		if (dn_tag->rule != NULL && V_fw_one_pass)
++		dt = (struct dn_pkt_tag *)(dn_tag+1);
++		args->rule = dt->rule;
++		args->rule_id = dt->rule_id;
++		args->chain_id = dt->chain_id;
++
++		m_tag_delete(*m0, dn_tag);
++
++		if (args->rule != NULL && V_fw_one_pass)
 +			/* dummynet packet, already partially processed */
 +			return (0);
-+		args->rule = dn_tag->rule;       /* matching rule to restart */
-+		args->rule_id = dn_tag->rule_id;
-+		args->chain_id = dn_tag->chain_id;
 +	}
 +
 +	return (1);
@@ -4639,6 +4866,7 @@ index ffffb59..c30a2e2 100644
 +	if ((*m0)->m_flags & M_PROMISC)
 +		return 0;
 +
++again:
 +	if (ipfw_ether_check_init(&args, m0, ifp, dir, inp) == 0)
 +		return 0;
 +
@@ -4650,6 +4878,8 @@ index ffffb59..c30a2e2 100644
 +
 +	if (ip_dn_io_ptr && (error == IP_FW_DUMMYNET)) {
 +		ip_dn_io_ptr(m0, DN_TO_ETH_DEMUX, &args);
++		if (*m0 != NULL)
++			goto again;
 +		return 0;
 +	}
 +
@@ -4673,6 +4903,7 @@ index ffffb59..c30a2e2 100644
 +
 +	KASSERT(dir == PFIL_OUT, ("ipfw_ether_check_out wrong direction!"));
 +
++again:
 +	if (ipfw_ether_check_init(&args, m0, ifp, dir, inp) == 0)
 +		return 0;
 +
@@ -4690,6 +4921,8 @@ index ffffb59..c30a2e2 100644
 +		else
 +			dn_dir = DN_TO_ETH_OUT;
 +		ip_dn_io_ptr(m0, dn_dir, &args);
++		if (*m0 != NULL)
++			goto again;
 +		return 0;
 +	}
 +
@@ -4737,7 +4970,7 @@ index ffffb59..c30a2e2 100644
  
  	return 0;
  }
-@@ -462,16 +589,26 @@ ipfw_hook(void)
+@@ -462,16 +602,26 @@ ipfw_hook(void)
  int
  ipfw_unhook(void)
  {
