@@ -1,10 +1,16 @@
-FreeBSD 7-STABLE patch. Generated on 2009 May 15
-Original file name: l2filter-stable-2009-05-15.patch
+FreeBSD 7-STABLE patch. SVN rev 203383
 
-diff -r 9191227a0bdc -r ba1c49944750 contrib/pf/man/pf.conf.5
---- a/contrib/pf/man/pf.conf.5	Fri May 15 20:17:22 2009 +0300
-+++ b/contrib/pf/man/pf.conf.5	Fri May 15 20:42:53 2009 +0300
-@@ -123,6 +123,7 @@
+Changelog:
+* Fix dummynet with tags mask panic
+* Fix panic in pf (pf_send_tcp)
+* Use dummynet fast io for layer2 packets to prevent reentering ipfw
+* Remove dummynet tags after processing
+
+diff --git a/contrib/pf/man/pf.conf.5 b/contrib/pf/man/pf.conf.5
+index 98c3d0e..3bf922c 100644
+--- a/contrib/pf/man/pf.conf.5
++++ b/contrib/pf/man/pf.conf.5
+@@ -123,6 +123,7 @@ and
  rules and in the routing options of filter rules, but only for
  .Ar round-robin
  pools.
@@ -12,7 +18,7 @@ diff -r 9191227a0bdc -r ba1c49944750 contrib/pf/man/pf.conf.5
  .Pp
  Tables can be defined with any of the following
  .Xr pfctl 8
-@@ -1485,6 +1486,10 @@
+@@ -1485,6 +1486,10 @@ The ruleset does not need to be reloaded.
  This is especially useful with
  .Ar nat .
  .Pp
@@ -23,7 +29,7 @@ diff -r 9191227a0bdc -r ba1c49944750 contrib/pf/man/pf.conf.5
  Ports can be specified either by number or by name.
  For example, port 80 can be specified as
  .Em www .
-@@ -2044,6 +2049,10 @@
+@@ -2044,6 +2049,10 @@ support these options, and
  must be specified explicitly to apply options to a rule.
  .Pp
  .Bl -tag -width xxxx -compact
@@ -34,7 +40,7 @@ diff -r 9191227a0bdc -r ba1c49944750 contrib/pf/man/pf.conf.5
  .It Ar max Aq Ar number
  Limits the number of concurrent states the rule may create.
  When this limit is reached, further packets matching the rule that would
-@@ -2735,6 +2744,9 @@
+@@ -2742,6 +2751,9 @@ pass in on $ext_if proto tcp from any to any port { ssh, smtp, domain, \e
  block in on $ext_if proto tcp from any os {"Windows 95", "Windows 98"} \e
        to any port smtp
  
@@ -44,7 +50,7 @@ diff -r 9191227a0bdc -r ba1c49944750 contrib/pf/man/pf.conf.5
  # IPv6
  # pass in/out all IPv6 traffic: note that we have to enable this in two
  # different ways, on both our physical interface and our tunnel
-@@ -2835,7 +2847,7 @@
+@@ -2842,7 +2854,7 @@ tableopts-list = tableopts-list tableopts | tableopts
  tableopts      = "persist" | "const" | "file" string |
                   "{" [ tableaddr-list ] "}"
  tableaddr-list = tableaddr-list [ "," ] tableaddr-spec | tableaddr-spec
@@ -53,7 +59,7 @@ diff -r 9191227a0bdc -r ba1c49944750 contrib/pf/man/pf.conf.5
  tableaddr      = hostname | ipv4-dotted-quad | ipv6-coloned-hex |
                   interface-name | "self"
  
-@@ -2890,7 +2902,7 @@
+@@ -2897,7 +2909,7 @@ host           = [ "!" ] ( address [ "/" mask-bits ] | "\*(Lt" string "\*(Gt" )
  redirhost      = address [ "/" mask-bits ]
  routehost      = "(" interface-name [ address [ "/" mask-bits ] ] ")"
  address        = ( interface-name | "(" interface-name ")" | hostname |
@@ -62,28 +68,29 @@ diff -r 9191227a0bdc -r ba1c49944750 contrib/pf/man/pf.conf.5
  host-list      = host [ [ "," ] host-list ]
  redirhost-list = redirhost [ [ "," ] redirhost-list ]
  routehost-list = routehost [ [ "," ] routehost-list ]
-@@ -2923,7 +2935,7 @@
+@@ -2930,7 +2942,7 @@ tos            = "tos" ( "lowdelay" | "throughput" | "reliability" |
                   [ "0x" ] number )
  
  state-opts     = state-opt [ [ "," ] state-opts ]
--state-opt      = ( "max" number | "no-sync" | timeout |
-+state-opt      = ( "ether" | "max" number | "no-sync" | timeout |
+-state-opt      = ( "max" number | "no-sync" | timeout | sloppy |
++state-opt      = ( "ether" | "max" number | "no-sync" | timeout | sloppy |
                   "source-track" [ ( "rule" | "global" ) ] |
                   "max-src-nodes" number | "max-src-states" number |
                   "max-src-conn" number |
-diff -r 9191227a0bdc -r ba1c49944750 contrib/pf/pfctl/parse.y
---- a/contrib/pf/pfctl/parse.y	Fri May 15 20:17:22 2009 +0300
-+++ b/contrib/pf/pfctl/parse.y	Fri May 15 20:42:53 2009 +0300
-@@ -128,7 +128,7 @@
+diff --git a/contrib/pf/pfctl/parse.y b/contrib/pf/pfctl/parse.y
+index c22a0b6..9d9ce60 100644
+--- a/contrib/pf/pfctl/parse.y
++++ b/contrib/pf/pfctl/parse.y
+@@ -128,7 +128,7 @@ enum	{ PF_STATE_OPT_MAX, PF_STATE_OPT_NOSYNC, PF_STATE_OPT_SRCTRACK,
  	    PF_STATE_OPT_MAX_SRC_STATES, PF_STATE_OPT_MAX_SRC_CONN,
  	    PF_STATE_OPT_MAX_SRC_CONN_RATE, PF_STATE_OPT_MAX_SRC_NODES,
  	    PF_STATE_OPT_OVERLOAD, PF_STATE_OPT_STATELOCK,
--	    PF_STATE_OPT_TIMEOUT };
-+	    PF_STATE_OPT_TIMEOUT, PF_STATE_OPT_ETHER };
+-	    PF_STATE_OPT_TIMEOUT, PF_STATE_OPT_SLOPPY };
++	    PF_STATE_OPT_TIMEOUT, PF_STATE_OPT_SLOPPY, PF_STATE_OPT_ETHER };
  
  enum	{ PF_SRCTRACK_NONE, PF_SRCTRACK, PF_SRCTRACK_GLOBAL, PF_SRCTRACK_RULE };
  
-@@ -409,7 +409,7 @@
+@@ -409,7 +409,7 @@ typedef struct {
  
  %}
  
@@ -92,7 +99,7 @@ diff -r 9191227a0bdc -r ba1c49944750 contrib/pf/pfctl/parse.y
  %token	RETURNRST RETURNICMP RETURNICMP6 PROTO INET INET6 ALL ANY ICMPTYPE
  %token	ICMP6TYPE CODE KEEP MODULATE STATE PORT RDR NAT BINAT ARROW NODF
  %token	MINTTL ERROR ALLOWOPTS FASTROUTE FILENAME ROUTETO DUPTO REPLYTO NO LABEL
-@@ -442,7 +442,7 @@
+@@ -442,7 +442,7 @@ typedef struct {
  %type	<v.icmp>		icmp6_list icmp6_item
  %type	<v.fromto>		fromto
  %type	<v.peer>		ipportspec from to
@@ -101,7 +108,7 @@ diff -r 9191227a0bdc -r ba1c49944750 contrib/pf/pfctl/parse.y
  %type	<v.host>		redir_host_list redirspec
  %type	<v.host>		route_host route_host_list routespec
  %type	<v.os>			os xos os_list
-@@ -1906,6 +1906,10 @@
+@@ -1914,6 +1914,10 @@ pfrule		: action dir logquick interface route af proto fromto
  					}
  					r.timeout[o->data.timeout.number] =
  					    o->data.timeout.seconds;
@@ -112,7 +119,7 @@ diff -r 9191227a0bdc -r ba1c49944750 contrib/pf/pfctl/parse.y
  				}
  				o = o->next;
  				free(p);
-@@ -2471,12 +2475,38 @@
+@@ -2479,12 +2483,38 @@ host_list	: ipspec			{ $$ = $1; }
  		}
  		;
  
@@ -152,7 +159,7 @@ diff -r 9191227a0bdc -r ba1c49944750 contrib/pf/pfctl/parse.y
  		}
  		| not NOROUTE			{
  			$$ = calloc(1, sizeof(struct node_host));
-@@ -3198,6 +3228,14 @@
+@@ -3206,6 +3236,14 @@ state_opt_item	: MAXIMUM number		{
  			$$->next = NULL;
  			$$->tail = $$;
  		}
@@ -167,7 +174,7 @@ diff -r 9191227a0bdc -r ba1c49944750 contrib/pf/pfctl/parse.y
  		| sourcetrack {
  			$$ = calloc(1, sizeof(struct node_state_opt));
  			if ($$ == NULL)
-@@ -4894,6 +4932,7 @@
+@@ -4917,6 +4955,7 @@ lookup(char *s)
  		{ "drop",		DROP},
  		{ "drop-ovl",		FRAGDROP},
  		{ "dup-to",		DUPTO},
@@ -175,10 +182,11 @@ diff -r 9191227a0bdc -r ba1c49944750 contrib/pf/pfctl/parse.y
  		{ "fastroute",		FASTROUTE},
  		{ "file",		FILENAME},
  		{ "fingerprints",	FINGERPRINTS},
-diff -r 9191227a0bdc -r ba1c49944750 contrib/pf/pfctl/pf_print_state.c
---- a/contrib/pf/pfctl/pf_print_state.c	Fri May 15 20:17:22 2009 +0300
-+++ b/contrib/pf/pfctl/pf_print_state.c	Fri May 15 20:42:53 2009 +0300
-@@ -85,7 +85,8 @@
+diff --git a/contrib/pf/pfctl/pf_print_state.c b/contrib/pf/pfctl/pf_print_state.c
+index 02a39b3..4542d3f 100644
+--- a/contrib/pf/pfctl/pf_print_state.c
++++ b/contrib/pf/pfctl/pf_print_state.c
+@@ -85,7 +85,8 @@ print_addr(struct pf_addr_wrap *addr, sa_family_t af, int verbose)
  		return;
  	case PF_ADDR_ADDRMASK:
  		if (PF_AZERO(&addr->v.a.addr, AF_INET6) &&
@@ -188,7 +196,7 @@ diff -r 9191227a0bdc -r ba1c49944750 contrib/pf/pfctl/pf_print_state.c
  			printf("any");
  		else {
  			char buf[48];
-@@ -113,12 +114,35 @@
+@@ -113,12 +114,35 @@ print_addr(struct pf_addr_wrap *addr, sa_family_t af, int verbose)
  
  	/* mask if not _both_ address and mask are zero */
  	if (!(PF_AZERO(&addr->v.a.addr, AF_INET6) &&
@@ -225,7 +233,7 @@ diff -r 9191227a0bdc -r ba1c49944750 contrib/pf/pfctl/pf_print_state.c
  }
  
  void
-@@ -299,6 +323,28 @@
+@@ -301,6 +325,28 @@ print_state(struct pf_state *s, int opts)
  		if (s->nat_src_node != NULL)
  			printf(", sticky-address");
  		printf("\n");
@@ -254,10 +262,11 @@ diff -r 9191227a0bdc -r ba1c49944750 contrib/pf/pfctl/pf_print_state.c
  	}
  	if (opts & PF_OPT_VERBOSE2) {
  		printf("   id: %016llx creatorid: %08x%s\n",
-diff -r 9191227a0bdc -r ba1c49944750 contrib/pf/pfctl/pfctl.c
---- a/contrib/pf/pfctl/pfctl.c	Fri May 15 20:17:22 2009 +0300
-+++ b/contrib/pf/pfctl/pfctl.c	Fri May 15 20:42:53 2009 +0300
-@@ -1902,8 +1902,8 @@
+diff --git a/contrib/pf/pfctl/pfctl.c b/contrib/pf/pfctl/pfctl.c
+index 21995f6..7fa86c8 100644
+--- a/contrib/pf/pfctl/pfctl.c
++++ b/contrib/pf/pfctl/pfctl.c
+@@ -1902,8 +1902,8 @@ pfctl_test_altqsupport(int dev, int opts)
  
  	if (ioctl(dev, DIOCGETALTQS, &pa)) {
  		if (errno == ENODEV) {
@@ -268,10 +277,11 @@ diff -r 9191227a0bdc -r ba1c49944750 contrib/pf/pfctl/pfctl.c
  				    "ALTQ related functions disabled\n");
  			return (0);
  		} else
-diff -r 9191227a0bdc -r ba1c49944750 contrib/pf/pfctl/pfctl.h
---- a/contrib/pf/pfctl/pfctl.h	Fri May 15 20:17:22 2009 +0300
-+++ b/contrib/pf/pfctl/pfctl.h	Fri May 15 20:42:53 2009 +0300
-@@ -117,6 +117,7 @@
+diff --git a/contrib/pf/pfctl/pfctl.h b/contrib/pf/pfctl/pfctl.h
+index 98a1bef..459c5a3 100644
+--- a/contrib/pf/pfctl/pfctl.h
++++ b/contrib/pf/pfctl/pfctl.h
+@@ -117,6 +117,7 @@ struct pf_altq	*pfaltq_lookup(const char *);
  char		*rate2str(double);
  
  void	 print_addr(struct pf_addr_wrap *, sa_family_t, int);
@@ -279,10 +289,11 @@ diff -r 9191227a0bdc -r ba1c49944750 contrib/pf/pfctl/pfctl.h
  void	 print_host(struct pf_state_host *, sa_family_t, int);
  void	 print_seq(struct pf_state_peer *);
  void	 print_state(struct pf_state *, int);
-diff -r 9191227a0bdc -r ba1c49944750 contrib/pf/pfctl/pfctl_parser.c
---- a/contrib/pf/pfctl/pfctl_parser.c	Fri May 15 20:17:22 2009 +0300
-+++ b/contrib/pf/pfctl/pfctl_parser.c	Fri May 15 20:42:53 2009 +0300
-@@ -46,6 +46,7 @@
+diff --git a/contrib/pf/pfctl/pfctl_parser.c b/contrib/pf/pfctl/pfctl_parser.c
+index c9b2e11..d63b27a 100644
+--- a/contrib/pf/pfctl/pfctl_parser.c
++++ b/contrib/pf/pfctl/pfctl_parser.c
+@@ -46,6 +46,7 @@ __FBSDID("$FreeBSD$");
  #include <netinet/ip_icmp.h>
  #include <netinet/icmp6.h>
  #include <net/pfvar.h>
@@ -290,7 +301,7 @@ diff -r 9191227a0bdc -r ba1c49944750 contrib/pf/pfctl/pfctl_parser.c
  #include <arpa/inet.h>
  
  #include <stdio.h>
-@@ -374,7 +375,9 @@
+@@ -374,7 +375,9 @@ print_fromto(struct pf_rule_addr *src, pf_osfp_t osfp, struct pf_rule_addr *dst,
  	    PF_AZERO(&dst->addr.v.a.mask, AF_INET6) &&
  	    !src->neg && !dst->neg &&
  	    !src->port_op && !dst->port_op &&
@@ -301,7 +312,7 @@ diff -r 9191227a0bdc -r ba1c49944750 contrib/pf/pfctl/pfctl_parser.c
  		printf(" all");
  	else {
  		printf(" from ");
-@@ -876,6 +879,8 @@
+@@ -878,6 +881,8 @@ print_rule(struct pf_rule *r, const char *anchor_call, int verbose)
  	for (i = 0; !opts && i < PFTM_MAX; ++i)
  		if (r->timeout[i])
  			opts = 1;
@@ -310,7 +321,7 @@ diff -r 9191227a0bdc -r ba1c49944750 contrib/pf/pfctl/pfctl_parser.c
  	if (opts) {
  		printf(" (");
  		if (r->max_states) {
-@@ -954,6 +959,12 @@
+@@ -962,6 +967,12 @@ print_rule(struct pf_rule *r, const char *anchor_call, int verbose)
  				    "inv.timeout" : pf_timeouts[j].name,
  				    r->timeout[i]);
  			}
@@ -323,7 +334,7 @@ diff -r 9191227a0bdc -r ba1c49944750 contrib/pf/pfctl/pfctl_parser.c
  		printf(")");
  	}
  	if (r->rule_flag & PFRULE_FRAGMENT)
-@@ -1419,6 +1430,35 @@
+@@ -1427,6 +1438,35 @@ host(const char *s)
  }
  
  struct node_host *
@@ -359,7 +370,7 @@ diff -r 9191227a0bdc -r ba1c49944750 contrib/pf/pfctl/pfctl_parser.c
  host_if(const char *s, int mask)
  {
  	struct node_host	*n, *h = NULL;
-@@ -1606,16 +1646,39 @@
+@@ -1614,16 +1654,39 @@ host_dns(const char *s, int v4mask, int v6mask)
  int
  append_addr(struct pfr_buffer *b, char *s, int test)
  {
@@ -401,7 +412,7 @@ diff -r 9191227a0bdc -r ba1c49944750 contrib/pf/pfctl/pfctl_parser.c
  	rv = append_addr_host(b, n, test, not);
  	do {
  		h = n;
-@@ -1661,6 +1724,7 @@
+@@ -1669,6 +1732,7 @@ append_addr_host(struct pfr_buffer *b, struct node_host *n, int test, int not)
  			errno = EINVAL;
  			return (-1);
  		}
@@ -409,10 +420,11 @@ diff -r 9191227a0bdc -r ba1c49944750 contrib/pf/pfctl/pfctl_parser.c
  		if (pfr_buf_add(b, &addr))
  			return (-1);
  	} while ((n = n->next) != NULL);
-diff -r 9191227a0bdc -r ba1c49944750 contrib/pf/pfctl/pfctl_parser.h
---- a/contrib/pf/pfctl/pfctl_parser.h	Fri May 15 20:17:22 2009 +0300
-+++ b/contrib/pf/pfctl/pfctl_parser.h	Fri May 15 20:42:53 2009 +0300
-@@ -296,6 +296,7 @@
+diff --git a/contrib/pf/pfctl/pfctl_parser.h b/contrib/pf/pfctl/pfctl_parser.h
+index 4885203..48f9d85 100644
+--- a/contrib/pf/pfctl/pfctl_parser.h
++++ b/contrib/pf/pfctl/pfctl_parser.h
+@@ -296,6 +296,7 @@ void			 ifa_load(void);
  struct node_host	*ifa_exists(const char *);
  struct node_host	*ifa_lookup(const char *, int);
  struct node_host	*host(const char *);
@@ -420,10 +432,11 @@ diff -r 9191227a0bdc -r ba1c49944750 contrib/pf/pfctl/pfctl_parser.h
  
  int			 append_addr(struct pfr_buffer *, char *, int);
  int			 append_addr_host(struct pfr_buffer *,
-diff -r 9191227a0bdc -r ba1c49944750 contrib/pf/pfctl/pfctl_radix.c
---- a/contrib/pf/pfctl/pfctl_radix.c	Fri May 15 20:17:22 2009 +0300
-+++ b/contrib/pf/pfctl/pfctl_radix.c	Fri May 15 20:42:53 2009 +0300
-@@ -607,12 +607,20 @@
+diff --git a/contrib/pf/pfctl/pfctl_radix.c b/contrib/pf/pfctl/pfctl_radix.c
+index 01ad475..3f62ee4 100644
+--- a/contrib/pf/pfctl/pfctl_radix.c
++++ b/contrib/pf/pfctl/pfctl_radix.c
+@@ -607,12 +607,20 @@ pfr_next_token(char buf[BUF_SIZE], FILE *fp)
  	do {
  		if (i < BUF_SIZE)
  			buf[i++] = next_ch;
@@ -446,10 +459,11 @@ diff -r 9191227a0bdc -r ba1c49944750 contrib/pf/pfctl/pfctl_radix.c
  	buf[i] = '\0';
  	return (1);
  }
-diff -r 9191227a0bdc -r ba1c49944750 contrib/pf/pfctl/pfctl_table.c
---- a/contrib/pf/pfctl/pfctl_table.c	Fri May 15 20:17:22 2009 +0300
-+++ b/contrib/pf/pfctl/pfctl_table.c	Fri May 15 20:42:53 2009 +0300
-@@ -438,6 +438,8 @@
+diff --git a/contrib/pf/pfctl/pfctl_table.c b/contrib/pf/pfctl/pfctl_table.c
+index 3d54466..e8f9cc4 100644
+--- a/contrib/pf/pfctl/pfctl_table.c
++++ b/contrib/pf/pfctl/pfctl_table.c
+@@ -438,6 +438,8 @@ print_addrx(struct pfr_addr *ad, struct pfr_addr *rad, int dns)
  	printf("%c %c%s", ch, (ad->pfra_not?'!':' '), buf);
  	if (ad->pfra_net < hostnet)
  		printf("/%d", ad->pfra_net);
@@ -458,10 +472,11 @@ diff -r 9191227a0bdc -r ba1c49944750 contrib/pf/pfctl/pfctl_table.c
  	if (rad != NULL && fback != PFR_FB_NONE) {
  		if (strlcpy(buf, "{error}", sizeof(buf)) >= sizeof(buf))
  			errx(1, "print_addrx: strlcpy");
-diff -r 9191227a0bdc -r ba1c49944750 sbin/ifconfig/ifconfig.8
---- a/sbin/ifconfig/ifconfig.8	Fri May 15 20:17:22 2009 +0300
-+++ b/sbin/ifconfig/ifconfig.8	Fri May 15 20:42:53 2009 +0300
-@@ -240,6 +240,27 @@
+diff --git a/sbin/ifconfig/ifconfig.8 b/sbin/ifconfig/ifconfig.8
+index 4b10e6e..25abc7d 100644
+--- a/sbin/ifconfig/ifconfig.8
++++ b/sbin/ifconfig/ifconfig.8
+@@ -240,6 +240,27 @@ and will never send any requests.
  If the Address Resolution Protocol is enabled,
  the host will perform normally,
  sending out requests and listening for replies.
@@ -489,19 +504,20 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ifconfig/ifconfig.8
  .It Cm broadcast
  (Inet only.)
  Specify the address to use to represent broadcasts to the
-diff -r 9191227a0bdc -r ba1c49944750 sbin/ifconfig/ifconfig.c
---- a/sbin/ifconfig/ifconfig.c	Fri May 15 20:17:22 2009 +0300
-+++ b/sbin/ifconfig/ifconfig.c	Fri May 15 20:42:53 2009 +0300
-@@ -773,7 +773,7 @@
+diff --git a/sbin/ifconfig/ifconfig.c b/sbin/ifconfig/ifconfig.c
+index 3f24456..8db6799 100644
+--- a/sbin/ifconfig/ifconfig.c
++++ b/sbin/ifconfig/ifconfig.c
+@@ -773,7 +773,7 @@ setifname(const char *val, int dummy __unused, int s,
  #define	IFFBITS \
  "\020\1UP\2BROADCAST\3DEBUG\4LOOPBACK\5POINTOPOINT\6SMART\7RUNNING" \
  "\10NOARP\11PROMISC\12ALLMULTI\13OACTIVE\14SIMPLEX\15LINK0\16LINK1\17LINK2" \
 -"\20MULTICAST\22PPROMISC\23MONITOR\24STATICARP\25NEEDSGIANT"
-+"\20MULTICAST\22PPROMISC\23MONITOR\24STATICARP\25NEEDSGIANT\26L2FILTER\27L2TAG"
++"\20MULTICAST\22PPROMISC\23MONITOR\24STATICARP\25NEEDSGIANT\30L2FILTER\31L2TAG"
  
  #define	IFCAPBITS \
  "\020\1RXCSUM\2TXCSUM\3NETCONS\4VLAN_MTU\5VLAN_HWTAGGING\6JUMBO_MTU\7POLLING" \
-@@ -1011,6 +1011,10 @@
+@@ -1011,6 +1011,10 @@ static struct cmd basic_cmds[] = {
  	DEF_CMD("-monitor",	-IFF_MONITOR,	setifflags),
  	DEF_CMD("staticarp",	IFF_STATICARP,	setifflags),
  	DEF_CMD("-staticarp",	-IFF_STATICARP,	setifflags),
@@ -512,9 +528,10 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ifconfig/ifconfig.c
  	DEF_CMD("rxcsum",	IFCAP_RXCSUM,	setifcap),
  	DEF_CMD("-rxcsum",	-IFCAP_RXCSUM,	setifcap),
  	DEF_CMD("txcsum",	IFCAP_TXCSUM,	setifcap),
-diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/dummynet.c
---- a/sbin/ipfw/dummynet.c	Fri May 15 20:17:22 2009 +0300
-+++ b/sbin/ipfw/dummynet.c	Fri May 15 20:42:53 2009 +0300
+diff --git a/sbin/ipfw/dummynet.c b/sbin/ipfw/dummynet.c
+index b77ab9b..625b891 100644
+--- a/sbin/ipfw/dummynet.c
++++ b/sbin/ipfw/dummynet.c
 @@ -32,6 +32,7 @@
  
  #include <ctype.h>
@@ -523,7 +540,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/dummynet.c
  #include <netdb.h>
  #include <stdio.h>
  #include <stdlib.h>
-@@ -70,6 +71,10 @@
+@@ -70,6 +71,10 @@ static struct _s_x dummynet_params[] = {
  	{ "src-ipv6",		TOK_SRCIP6},
  	{ "src-ip6",		TOK_SRCIP6},
  	{ "dummynet-params",	TOK_NULL },
@@ -534,7 +551,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/dummynet.c
  	{ NULL, 0 }	/* terminator */
  };
  
-@@ -124,8 +129,7 @@
+@@ -124,8 +129,7 @@ list_queues(struct dn_flow_set *fs, struct dn_flow_queue *q)
  	for (l = 0; l < fs->rq_elements; l++) {
  		struct in_addr ina;
  
@@ -544,7 +561,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/dummynet.c
  			continue;
  
  		if (!index_printed) {
-@@ -134,13 +138,16 @@
+@@ -134,13 +138,16 @@ list_queues(struct dn_flow_set *fs, struct dn_flow_queue *q)
  				printf("\n");
  			indexes++;
  			printf("    "
@@ -563,7 +580,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/dummynet.c
  			    "Tot_pkt/bytes Pkt/Byte Drp\n");
  		}
  
-@@ -156,6 +163,7 @@
+@@ -156,6 +163,7 @@ list_queues(struct dn_flow_set *fs, struct dn_flow_queue *q)
  		ina.s_addr = htonl(q[l].id.dst_ip);
  		printf("%15s/%-5d ",
  		    inet_ntoa(ina), q[l].id.dst_port);
@@ -571,7 +588,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/dummynet.c
  		printf("%4llu %8llu %2u %4u %3u\n",
  		    align_uint64(&q[l].tot_pkts),
  		    align_uint64(&q[l].tot_bytes),
-@@ -168,7 +176,7 @@
+@@ -168,7 +176,7 @@ list_queues(struct dn_flow_set *fs, struct dn_flow_queue *q)
  	/* Print IPv6 flows */
  	index_printed = 0;
  	for (l = 0; l < fs->rq_elements; l++) {
@@ -580,7 +597,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/dummynet.c
  			continue;
  
  		if (!index_printed) {
-@@ -183,11 +191,13 @@
+@@ -183,11 +191,13 @@ list_queues(struct dn_flow_set *fs, struct dn_flow_queue *q)
  			printf("%s/0x%04x -> ", buff, fs->flow_mask.src_port);
  			inet_ntop( AF_INET6, &(fs->flow_mask.dst_ip6),
  			    buff, sizeof(buff) );
@@ -595,7 +612,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/dummynet.c
  			    "Tot_pkt/bytes Pkt/Byte Drp\n");
  		}
  		printf("%3d ", q[l].hash_slot);
-@@ -202,6 +212,7 @@
+@@ -202,6 +212,7 @@ list_queues(struct dn_flow_set *fs, struct dn_flow_queue *q)
  		printf(" %39s/%-5d ",
  		    inet_ntop(AF_INET6, &(q[l].id.dst_ip6), buff, sizeof(buff)),
  		    q[l].id.dst_port);
@@ -603,7 +620,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/dummynet.c
  		printf(" %4llu %8llu %2u %4u %3u\n",
  		    align_uint64(&q[l].tot_pkts),
  		    align_uint64(&q[l].tot_bytes),
-@@ -211,6 +222,44 @@
+@@ -211,6 +222,44 @@ list_queues(struct dn_flow_set *fs, struct dn_flow_queue *q)
  			    align_uint64(&q[l].S),
  			    align_uint64(&q[l].F));
  	}
@@ -648,7 +665,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/dummynet.c
  }
  
  static void
-@@ -346,6 +395,66 @@
+@@ -344,6 +393,66 @@ ipfw_delete_pipe(int pipe_or_queue, int i)
  	return i;
  }
  
@@ -715,7 +732,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/dummynet.c
  void
  ipfw_config_pipe(int ac, char **av)
  {
-@@ -418,12 +527,7 @@
+@@ -416,12 +525,7 @@ ipfw_config_pipe(int ac, char **av)
  			end = NULL;
  
  			while (ac >= 1) {
@@ -729,7 +746,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/dummynet.c
  			    tok = match_token(dummynet_params, *av);
  			    ac--; av++;
  			    switch(tok) {
-@@ -440,78 +544,65 @@
+@@ -438,78 +542,65 @@ ipfw_config_pipe(int ac, char **av)
  				    n2mask(&(p.fs.flow_mask.src_ip6), 128);
  				    p.fs.flow_mask.flow_id6 = ~0;
  				    p.fs.flags_fs |= DN_HAVE_FLOW_MASK;
@@ -837,19 +854,23 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/dummynet.c
  			} /* end while, config masks */
  end_mask:
  			break;
-diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw.8
---- a/sbin/ipfw/ipfw.8	Fri May 15 20:17:22 2009 +0300
-+++ b/sbin/ipfw/ipfw.8	Fri May 15 20:42:53 2009 +0300
-@@ -45,7 +45,7 @@
+diff --git a/sbin/ipfw/ipfw.8 b/sbin/ipfw/ipfw.8
+index a71b45b..b6cec3f 100644
+--- a/sbin/ipfw/ipfw.8
++++ b/sbin/ipfw/ipfw.8
+@@ -45,9 +45,9 @@
  .Cm set show
  .Pp
  .Nm
 -.Cm table Ar number Cm add Ar addr Ns Oo / Ns Ar masklen Oc Op Ar value
 +.Cm table Ar number Cm add Ar addr Ns Oo / Ns Ar masklen Oc Oo Cm ether Ar etheraddr Oc Op Ar value
  .Nm
- .Cm table Ar number Cm delete Ar addr Ns Op / Ns Ar masklen
+-.Cm table Ar number Cm delete Ar addr Ns Op / Ns Ar masklen
++.Cm table Ar number Cm delete Ar addr Ns Oo / Ns Ar masklen Oc Oo Cm ether Ar etheraddr Oc
  .Nm
-@@ -338,9 +338,9 @@
+ .Cm table
+ .Brq Ar number | all
+@@ -338,9 +338,9 @@ You can use
  to temporarily disable the firewall to regain access to the network,
  allowing you to fix the problem.
  .Sh PACKET FLOW
@@ -862,7 +883,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw.8
  have this picture in mind in order to design a correct ruleset.
  .Bd -literal -offset indent
         ^    to upper layers    V
-@@ -348,11 +348,12 @@
+@@ -348,11 +348,12 @@ have this picture in mind in order to design a correct ruleset.
         +----------->-----------+
         ^                       V
   [ip(6)_input]           [ip(6)_output]     net.inet(6).ip(6).fw.enable=1
@@ -877,7 +898,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw.8
         ^                       V
         |      to devices       |
  .Ed
-@@ -376,13 +377,39 @@
+@@ -376,13 +377,39 @@ is invoked from
  or
  .Cm ip6_input() .
  .Pp
@@ -918,7 +939,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw.8
  the match pattern will not match, but a
  .Cm not
  operator in front of such patterns
-@@ -396,7 +423,7 @@
+@@ -396,7 +423,7 @@ differentiate among the possible places.
  .Cm skipto
  rules can be useful here, as an example:
  .Bd -literal -offset indent
@@ -927,7 +948,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw.8
  ipfw add 10 skipto 1000 all from any to any layer2 in
  # packets from ip_input
  ipfw add 10 skipto 2000 all from any to any not layer2 in
-@@ -407,7 +434,7 @@
+@@ -407,7 +434,7 @@ ipfw add 10 skipto 4000 all from any to any layer2 out
  .Ed
  .Pp
  (yes, at the moment there is no way to differentiate between
@@ -936,7 +957,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw.8
  .Sh SYNTAX
  In general, each keyword or argument must be provided as
  a separate command line argument, with no leading or trailing
-@@ -1125,6 +1152,19 @@
+@@ -1125,6 +1152,19 @@ Everything following // is considered as a comment and stored in the rule.
  You can have comment-only rules, which are listed as having a
  .Cm count
  action followed by the comment.
@@ -956,7 +977,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw.8
  .It Cm bridged
  Alias for
  .Cm layer2 .
-@@ -1136,6 +1176,25 @@
+@@ -1136,6 +1176,25 @@ input for delivery.
  .It Cm diverted-output
  Matches only packets going from a divert socket back outward to the IP
  stack output for delivery.
@@ -982,7 +1003,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw.8
  .It Cm dst-ip Ar ip-address
  Matches IPv4 packets whose destination IP is one of the address(es)
  specified as argument.
-@@ -1147,6 +1206,19 @@
+@@ -1147,6 +1206,19 @@ Matches IP packets whose destination port is one of the port(s)
  specified as argument.
  .It Cm established
  Matches TCP packets that have the RST or ACK bits set.
@@ -1002,7 +1023,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw.8
  .It Cm ext6hdr Ar header
  Matches IPv6 packets containing the extended header given by
  .Ar header .
-@@ -1351,57 +1423,6 @@
+@@ -1351,57 +1423,6 @@ of source and destination addresses and ports can be
  specified.
  Currently,
  only IPv4 flows are supported.
@@ -1060,7 +1081,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw.8
  .It Cm proto Ar protocol
  Matches packets with the corresponding IP protocol.
  .It Cm recv | xmit | via Brq Ar ifX | Ar if Ns Cm * | Ar ipno | Ar any
-@@ -1450,6 +1471,40 @@
+@@ -1450,6 +1471,40 @@ interface.
  Matches TCP packets that have the SYN bit set but no ACK bit.
  This is the short form of
  .Dq Li tcpflags\ syn,!ack .
@@ -1101,7 +1122,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw.8
  .It Cm src-ip Ar ip-address
  Matches IPv4 packets whose source IP is one of the address(es)
  specified as an argument.
-@@ -1465,6 +1520,8 @@
+@@ -1465,6 +1520,8 @@ Matches packets whose tags are included in
  which is either a single value or a list of values or ranges
  specified in the same way as
  .Ar ports .
@@ -1110,7 +1131,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw.8
  Tags can be applied to the packet using
  .Cm tag
  rule action parameter (see it's description for details on tags).
-@@ -1606,6 +1663,8 @@
+@@ -1606,6 +1663,8 @@ If
  is not specified, it defaults to 32.
  When looking up an IP address in a table, the most specific
  entry will match.
@@ -1119,7 +1140,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw.8
  Associated with each entry is a 32-bit unsigned
  .Ar value ,
  which can optionally be checked by a rule matching code.
-@@ -1739,6 +1798,13 @@
+@@ -1739,6 +1798,13 @@ and
  .Em dst
  are used here only to denote the initial match addresses, but they
  are completely equivalent afterwards).
@@ -1133,7 +1154,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw.8
  Dynamic rules will be checked at the first
  .Cm check-state, keep-state
  or
-@@ -1941,7 +2007,7 @@
+@@ -1941,7 +2007,7 @@ sent to a different
  .Em dynamic
  pipe or queue.
  A flow identifier is constructed by masking the IP addresses,
@@ -1142,7 +1163,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw.8
  .Cm mask
  options in the configuration of the pipe or queue.
  For each different flow identifier, a new pipe or queue is created
-@@ -1957,7 +2023,9 @@
+@@ -1957,7 +2023,9 @@ are used, each flow will share the parent's pipe bandwidth evenly
  with other flows generated by the same queue (note that other queues
  with different weights might be connected to the same pipe).
  .br
@@ -1153,7 +1174,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw.8
  .Pp
  .Cm dst-ip Ar mask ,
  .Cm dst-ip6 Ar mask ,
-@@ -1966,11 +2034,20 @@
+@@ -1966,11 +2034,20 @@ Available mask specifiers are a combination of one or more of the following:
  .Cm dst-port Ar mask ,
  .Cm src-port Ar mask ,
  .Cm flow-id Ar mask ,
@@ -1175,9 +1196,10 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw.8
  .Pp
  .It Cm noerror
  When a packet is dropped by a
-diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw2.c
---- a/sbin/ipfw/ipfw2.c	Fri May 15 20:17:22 2009 +0300
-+++ b/sbin/ipfw/ipfw2.c	Fri May 15 20:42:53 2009 +0300
+diff --git a/sbin/ipfw/ipfw2.c b/sbin/ipfw/ipfw2.c
+index aad5bd4..259207c 100644
+--- a/sbin/ipfw/ipfw2.c
++++ b/sbin/ipfw/ipfw2.c
 @@ -44,6 +44,8 @@
  
  #include <net/ethernet.h>
@@ -1187,7 +1209,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw2.c
  #include <netinet/in.h>
  #include <netinet/in_systm.h>	/* only n_short, n_long */
  #include <netinet/ip.h>
-@@ -143,6 +145,11 @@
+@@ -143,6 +145,11 @@ static struct _s_x f_iptos[] = {
  	{ NULL,	0 }
  };
  
@@ -1199,7 +1221,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw2.c
  static struct _s_x limit_masks[] = {
  	{"all",		DYN_SRC_ADDR|DYN_SRC_PORT|DYN_DST_ADDR|DYN_DST_PORT},
  	{"src-addr",	DYN_SRC_ADDR},
-@@ -157,6 +164,7 @@
+@@ -157,6 +164,7 @@ static struct _s_x limit_masks[] = {
   * This is only used in this code.
   */
  #define IPPROTO_ETHERTYPE	0x1000
@@ -1207,7 +1229,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw2.c
  static struct _s_x ether_types[] = {
      /*
       * Note, we cannot use "-:&/" in the names because they are field
-@@ -184,6 +192,15 @@
+@@ -184,6 +192,15 @@ static struct _s_x ether_types[] = {
  	{ "ns",		0x0600 },
  	{ NULL,		0 }
  };
@@ -1223,7 +1245,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw2.c
  
  
  static struct _s_x rule_actions[] = {
-@@ -270,9 +287,13 @@
+@@ -270,9 +287,13 @@ static struct _s_x rule_options[] = {
  	{ "dst-port",		TOK_DSTPORT },
  	{ "src-port",		TOK_SRCPORT },
  	{ "proto",		TOK_PROTO },
@@ -1240,7 +1262,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw2.c
  	{ "verrevpath",		TOK_VERREVPATH },
  	{ "versrcreach",	TOK_VERSRCREACH },
  	{ "antispoof",		TOK_ANTISPOOF },
-@@ -289,6 +310,11 @@
+@@ -289,6 +310,11 @@ static struct _s_x rule_options[] = {
  	{ "dst-ip6",		TOK_DSTIP6},
  	{ "src-ipv6",		TOK_SRCIP6},
  	{ "src-ip6",		TOK_SRCIP6},
@@ -1252,7 +1274,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw2.c
  	{ "//",			TOK_COMMENT },
  
  	{ "not",		TOK_NOT },		/* pseudo option */
-@@ -462,6 +488,13 @@
+@@ -462,6 +488,13 @@ print_port(int proto, uint16_t port)
  			printf("%s", s);
  		else
  			printf("0x%04x", port);
@@ -1266,7 +1288,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw2.c
  	} else {
  		struct servent *se = NULL;
  		if (co.do_resolv) {
-@@ -482,7 +515,8 @@
+@@ -482,7 +515,8 @@ static struct _s_x _port_name[] = {
  	{"ipid",	O_IPID},
  	{"iplen",	O_IPLEN},
  	{"ipttl",	O_IPTTL},
@@ -1276,7 +1298,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw2.c
  	{"tcpdatalen",	O_TCPDATALEN},
  	{"tagged",	O_TAGGED},
  	{NULL,		0}
-@@ -523,6 +557,7 @@
+@@ -523,6 +557,7 @@ print_newports(ipfw_insn_u16 *cmd, int proto, int opcode)
   * In particular:
   *	proto == -1 disables the protocol check;
   *	proto == IPPROTO_ETHERTYPE looks up an internal table
@@ -1284,7 +1306,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw2.c
   *	proto == <some value in /etc/protocols> matches the values there.
   * Returns *end == s in case the parameter is not found.
   */
-@@ -564,6 +599,13 @@
+@@ -564,6 +599,13 @@ strtoport(char *s, char **end, int base, int proto)
  			*end = s1;
  			return i;
  		}
@@ -1298,26 +1320,23 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw2.c
  	} else {
  		struct protoent *pe = NULL;
  		struct servent *se;
-@@ -816,25 +858,24 @@
+@@ -816,25 +858,24 @@ print_ip(ipfw_insn_ip *cmd, char const *s)
  }
  
  /*
 - * prints a MAC address/mask pair
 + * prints a ethernet (MAC) address/mask pair
   */
+-static void
+-print_mac(uint8_t *addr, uint8_t *mask)
 +void
 +print_ether_addr(u_char *ea)
-+{
+ {
+-	int l = contigmask(mask, 48);
 +	printf("%02x:%02x:%02x:%02x:%02x:%02x",
 +		ea[0], ea[1], ea[2], ea[3], ea[4], ea[5]);
 +}
-+
- static void
--print_mac(uint8_t *addr, uint8_t *mask)
-+print_ether(ipfw_ether_addr *addr)
- {
--	int l = contigmask(mask, 48);
--
+ 
 -	if (l == 0)
 -		printf(" any");
 -	else {
@@ -1330,6 +1349,9 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw2.c
 -		else if (l < 48)
 -			printf("/%d", l);
 -	}
++static void
++print_ether(ipfw_ether_addr *addr)
++{
 +	if ((addr->flags & IPFW_EA_CHECK) == 0)
 +		printf("any");
 +	else if (addr->flags & IPFW_EA_MULTICAST)
@@ -1339,7 +1361,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw2.c
  }
  
  static void
-@@ -883,7 +924,7 @@
+@@ -883,7 +924,7 @@ print_icmptypes(ipfw_insn_u32 *cmd)
   * The first argument is the list of fields we have, the second is
   * the list of fields we want to be printed.
   *
@@ -1348,7 +1370,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw2.c
   *   + if the rule does not contain IP addresses/ports, do not print them;
   *   + if the rule does not contain an IP proto, print "all" instead of "ip";
   *
-@@ -1267,16 +1308,23 @@
+@@ -1267,16 +1308,23 @@ show_ipfw(struct ip_fw *rule, int pcwidth, int bcwidth)
  			if (cmd->len & F_NOT && cmd->opcode != O_IN)
  				printf(" not");
  			switch(cmd->opcode) {
@@ -1356,29 +1378,29 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw2.c
 -				ipfw_insn_mac *m = (ipfw_insn_mac *)cmd;
 +			case O_ETHER_SRC: {
 +				ipfw_insn_ether *m = (ipfw_insn_ether *)cmd;
++
++				printf(" src-ether ");
++				print_ether(&m->ether);
++				}
++				break;
++
++			case O_ETHER_DST: {
++				ipfw_insn_ether *m = (ipfw_insn_ether *)cmd;
  
 -				printf(" MAC");
 -				print_mac(m->addr, m->mask);
 -				print_mac(m->addr + 6, m->mask + 6);
-+				printf(" src-ether ");
++				printf(" dst-ether ");
 +				print_ether(&m->ether);
  				}
  				break;
  
 -			case O_MAC_TYPE:
-+			case O_ETHER_DST: {
-+				ipfw_insn_ether *m = (ipfw_insn_ether *)cmd;
-+
-+				printf(" dst-ether ");
-+				print_ether(&m->ether);
-+				}
-+				break;
-+
 +			case O_ETHER_TYPE:
  				print_newports((ipfw_insn_u16 *)cmd,
  						IPPROTO_ETHERTYPE, cmd->opcode);
  				break;
-@@ -1290,6 +1338,21 @@
+@@ -1290,6 +1338,21 @@ show_ipfw(struct ip_fw *rule, int pcwidth, int bcwidth)
  				printf(" fib %u", cmd->arg1 );
  				break;
  
@@ -1400,7 +1422,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw2.c
  			case O_IN:
  				printf(cmd->len & F_NOT ? " out" : " in");
  				break;
-@@ -1457,6 +1520,10 @@
+@@ -1457,6 +1520,10 @@ show_ipfw(struct ip_fw *rule, int pcwidth, int bcwidth)
  				comment = (char *)(cmd + 1);
  				break;
  
@@ -1411,7 +1433,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw2.c
  			case O_KEEP_STATE:
  				printf(" keep-state");
  				break;
-@@ -1495,9 +1562,13 @@
+@@ -1495,9 +1562,13 @@ show_ipfw(struct ip_fw *rule, int pcwidth, int bcwidth)
  				break;
  
  			case O_TAGGED:
@@ -1428,7 +1450,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw2.c
  					print_newports((ipfw_insn_u16 *)cmd, 0,
  					    O_TAGGED);
  				break;
-@@ -1556,13 +1627,13 @@
+@@ -1556,13 +1627,13 @@ show_dyn_ipfw(ipfw_dyn_rule *d, int pcwidth, int bcwidth)
  	else
  		printf(" proto %u", d->id.proto);
  
@@ -1444,7 +1466,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw2.c
  		printf(" %s %d", inet_ntop(AF_INET6, &d->id.src_ip6, buf,
  		    sizeof(buf)), d->id.src_port);
  		printf(" <-> %s %d", inet_ntop(AF_INET6, &d->id.dst_ip6, buf,
-@@ -2248,50 +2319,26 @@
+@@ -2248,50 +2319,26 @@ fill_iface(ipfw_insn_if *cmd, char *arg)
  }
  
  static void
@@ -1462,13 +1484,9 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw2.c
  	if (strcmp(p, "any") == 0) {
 -		for (i = 0; i < ETHER_ADDR_LEN; i++)
 -			addr[i] = mask[i] = 0;
-+		return;
-+	}
-+	if (strcmp(p, "multicast") == 0) {
-+		addr->flags = IPFW_EA_CHECK | IPFW_EA_MULTICAST;
  		return;
  	}
- 
+-
 -	optr = ptr = strdup(p);
 -	if ((ap = strsep(&ptr, "&/")) != NULL && *ap != 0) {
 -		l = strlen(ap);
@@ -1477,10 +1495,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw2.c
 -		bcopy(mac, addr, ETHER_ADDR_LEN);
 -	} else
 -		errx(EX_DATAERR, "Incorrect MAC address");
-+	if (strspn(p, etherset) != strlen(p) ||
-+			(ether = ether_aton(p)) == NULL)
-+		errx(EX_DATAERR, "Incorrect ethernet (MAC) address");
- 
+-
 -	if (ptr != NULL) { /* we have mask? */
 -		if (p[ptr - optr - 1] == '/') { /* mask len */
 -			l = strtol(ptr, &ap, 10);
@@ -1498,17 +1513,24 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw2.c
 -	} else { /* default mask: ff:ff:ff:ff:ff:ff */
 -		for (i = 0; i < ETHER_ADDR_LEN; i++)
 -			mask[i] = 0xff;
--	}
++	if (strcmp(p, "multicast") == 0) {
++		addr->flags = IPFW_EA_CHECK | IPFW_EA_MULTICAST;
++		return;
+ 	}
 -	for (i = 0; i < ETHER_ADDR_LEN; i++)
 -		addr[i] &= mask[i];
--
+ 
 -	free(optr);
++	if (strspn(p, etherset) != strlen(p) ||
++			(ether = ether_aton(p)) == NULL)
++		errx(EX_DATAERR, "Incorrect ethernet (MAC) address");
++
 +	memcpy(addr->octet, ether, ETHER_ADDR_LEN);
 +	addr->flags = IPFW_EA_CHECK;
  }
  
  /*
-@@ -2354,31 +2401,44 @@
+@@ -2354,31 +2401,44 @@ fill_cmd(ipfw_insn *cmd, enum ipfw_opcodes opcode, int flags, uint16_t arg)
   * two microinstructions, and returns the pointer to the last one.
   */
  static ipfw_insn *
@@ -1516,16 +1538,16 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw2.c
 +add_ether(ipfw_insn *cmd, int opcode, char *arg)
  {
 -	ipfw_insn_mac *mac;
-+	ipfw_insn_ether *ether;
- 
+-
 -	if (ac < 2)
 -		errx(EX_DATAERR, "MAC dst src");
-+	cmd->opcode = opcode;
-+	cmd->len = (cmd->len & (F_NOT | F_OR)) | F_INSN_SIZE(ipfw_insn_ether);
++	ipfw_insn_ether *ether;
  
 -	cmd->opcode = O_MACADDR2;
 -	cmd->len = (cmd->len & (F_NOT | F_OR)) | F_INSN_SIZE(ipfw_insn_mac);
--
++	cmd->opcode = opcode;
++	cmd->len = (cmd->len & (F_NOT | F_OR)) | F_INSN_SIZE(ipfw_insn_ether);
+ 
 -	mac = (ipfw_insn_mac *)cmd;
 -	get_mac_addr_mask(av[0], mac->addr, mac->mask);	/* dst */
 -	get_mac_addr_mask(av[1], &(mac->addr[ETHER_ADDR_LEN]),
@@ -1538,9 +1560,8 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw2.c
  static ipfw_insn *
 -add_mactype(ipfw_insn *cmd, int ac, char *av)
 +add_ether_src(ipfw_insn *cmd, int ac, char *av[])
- {
- 	if (ac < 1)
--		errx(EX_DATAERR, "missing MAC type");
++{
++	if (ac < 1)
 +		errx(EX_DATAERR, "src-ether src");
 +
 +	return add_ether(cmd, O_ETHER_SRC, av[0]);
@@ -1548,8 +1569,9 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw2.c
 +
 +static ipfw_insn *
 +add_ether_dst(ipfw_insn *cmd, int ac, char *av[])
-+{
-+	if (ac < 1)
+ {
+ 	if (ac < 1)
+-		errx(EX_DATAERR, "missing MAC type");
 +		errx(EX_DATAERR, "dst-ether dst");
 +
 +	return add_ether(cmd, O_ETHER_DST, av[0]);
@@ -1567,7 +1589,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw2.c
  		return cmd;
  	} else
  		return NULL;
-@@ -3390,16 +3450,31 @@
+@@ -3390,16 +3450,31 @@ read_options:
  				    *av);
  			break;
  
@@ -1580,6 +1602,12 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw2.c
 +				 * XXX will not allocate next command here
 +				 */
 +				av[0] = strdup("src-ether");
++			}
++			break;
++
++		case TOK_ETHER_SRC:
++			if (add_ether_src(cmd, ac, av)) {
++				ac--; av++;
  			}
  			break;
  
@@ -1587,12 +1615,6 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw2.c
 -			NEED1("missing mac type");
 -			if (!add_mactype(cmd, ac, *av))
 -				errx(EX_DATAERR, "invalid mac type %s", *av);
-+		case TOK_ETHER_SRC:
-+			if (add_ether_src(cmd, ac, av)) {
-+				ac--; av++;
-+			}
-+			break;
-+
 +		case TOK_ETHER_DST:
 +			if (add_ether_dst(cmd, ac, av)) {
 +				ac--; av++;
@@ -1606,7 +1628,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw2.c
  			ac--; av++;
  			break;
  
-@@ -3451,8 +3526,9 @@
+@@ -3451,8 +3526,9 @@ read_options:
  				if (!add_ports(cmd, *av, 0, O_TAGGED))
  					errx(EX_DATAERR, "tagged: invalid tag"
  					    " list: %s", *av);
@@ -1618,7 +1640,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw2.c
  				uint16_t tag;
  
  				GET_UINT_ARG(tag, 1, IPFW_DEFAULT_RULE - 1,
-@@ -3468,6 +3544,37 @@
+@@ -3468,6 +3544,37 @@ read_options:
  			ac--; av++;
  			break;
  
@@ -1656,7 +1678,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw2.c
  		default:
  			errx(EX_USAGE, "unrecognised option [%d] %s\n", i, s);
  		}
-@@ -3711,7 +3818,7 @@
+@@ -3711,7 +3818,7 @@ ipfw_table_handler(int ac, char *av[])
  		do_add = **av == 'a';
  		ac--; av++;
  		if (!ac)
@@ -1665,7 +1687,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw2.c
  		p = strchr(*av, '/');
  		if (p) {
  			*p++ = '\0';
-@@ -3720,9 +3827,22 @@
+@@ -3720,9 +3827,22 @@ ipfw_table_handler(int ac, char *av[])
  				errx(EX_DATAERR, "bad width ``%s''", p);
  		} else
  			ent.masklen = 32;
@@ -1691,7 +1713,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw2.c
  		if (do_add && ac) {
  			unsigned int tval;
  			/* isdigit is a bit of a hack here.. */
-@@ -3795,20 +3915,36 @@
+@@ -3795,20 +3915,36 @@ table_list(ipfw_table_entry ent, int need_header)
  		printf("---table(%d)---\n", tbl->tbl);
  	for (a = 0; a < tbl->cnt; a++) {
  		unsigned int tval;
@@ -1710,12 +1732,9 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw2.c
 +		    tval = htonl(tval);
 +		    strlcpy(tval_buf, inet_ntoa(*(struct in_addr *)
 +			&tval), sizeof(tval_buf));
- 		} else {
--			printf("%s/%u %u\n",
--				inet_ntoa(*(struct in_addr *)&tbl->ent[a].addr),
--				tbl->ent[a].masklen, tval);
++		} else {
 +		    snprintf(tval_buf, sizeof(tval_buf), "%u", tval);
- 		}
++		}
 +		if (tbl->ent[a].ether_addr.flags & IPFW_EA_CHECK) {
 +		    uint8_t *x = (uint8_t *)&tbl->ent[a].ether_addr;
 +		    if (tbl->ent[a].ether_addr.flags & IPFW_EA_MULTICAST)
@@ -1724,9 +1743,12 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw2.c
 +			snprintf(tether_buf, sizeof(tether_buf), 
 +			    "ether %02x:%02x:%02x:%02x:%02x:%02x ",
 +			    x[0], x[1], x[2], x[3], x[4], x[5]);
-+		} else {
+ 		} else {
+-			printf("%s/%u %u\n",
+-				inet_ntoa(*(struct in_addr *)&tbl->ent[a].addr),
+-				tbl->ent[a].masklen, tval);
 +		    tether_buf[0] = 0;
-+		}
+ 		}
 +
 +		if (tbl->ent[a].addr == INADDR_ANY && tbl->ent[a].masklen == 0)
 +			printf("any");
@@ -1738,10 +1760,11 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw2.c
  	}
  	free(tbl);
  }
-diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw2.h
---- a/sbin/ipfw/ipfw2.h	Fri May 15 20:17:22 2009 +0300
-+++ b/sbin/ipfw/ipfw2.h	Fri May 15 20:42:53 2009 +0300
-@@ -133,8 +133,10 @@
+diff --git a/sbin/ipfw/ipfw2.h b/sbin/ipfw/ipfw2.h
+index 442e7b6..c80fa37 100644
+--- a/sbin/ipfw/ipfw2.h
++++ b/sbin/ipfw/ipfw2.h
+@@ -133,8 +133,10 @@ enum tokens {
  	TOK_TCPACK,
  	TOK_TCPWIN,
  	TOK_ICMPTYPES,
@@ -1754,7 +1777,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw2.h
  	TOK_VERREVPATH,
  	TOK_VERSRCREACH,
  	TOK_ANTISPOOF,
-@@ -183,6 +185,12 @@
+@@ -183,6 +185,12 @@ enum tokens {
  
  	TOK_FIB,
  	TOK_SETFIB,
@@ -1767,7 +1790,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw2.h
  };
  /*
   * the following macro returns an error message if we run out of
-@@ -244,6 +252,8 @@
+@@ -244,6 +252,8 @@ void ipfw_flush(int force);
  void ipfw_zero(int ac, char *av[], int optname);
  void ipfw_list(int ac, char *av[], int show_counters);
  
@@ -1776,10 +1799,11 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/ipfw2.h
  /* altq.c */
  void altq_set_enabled(int enabled);
  u_int32_t altq_name_to_qid(const char *name);
-diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/main.c
---- a/sbin/ipfw/main.c	Fri May 15 20:17:22 2009 +0300
-+++ b/sbin/ipfw/main.c	Fri May 15 20:42:53 2009 +0300
-@@ -48,7 +48,7 @@
+diff --git a/sbin/ipfw/main.c b/sbin/ipfw/main.c
+index bf7eaf7..bee3eb9 100644
+--- a/sbin/ipfw/main.c
++++ b/sbin/ipfw/main.c
+@@ -48,7 +48,7 @@ help(void)
  "		redirect_port linkspec|redirect_proto linkspec}\n"
  "set [disable N... enable N...] | move [rule] X to Y | swap X Y | show\n"
  "set N {show|list|zero|resetlog|delete} [N{,N}] | flush\n"
@@ -1788,7 +1812,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/main.c
  "table all {flush | list}\n"
  "\n"
  "RULE-BODY:	check-state [PARAMS] | ACTION [PARAMS] ADDR [OPTION_LIST]\n"
-@@ -63,17 +63,20 @@
+@@ -63,17 +63,20 @@ help(void)
  "IP6ADDR:	[not] { any | me | me6 | ip6/bits | IP6LIST }\n"
  "IP6LIST:	{ ip6 | ip6/bits }[,IP6LIST]\n"
  "IPLIST:	{ ip | ip/bits | ip:mask }[,IPLIST]\n"
@@ -1813,10 +1837,11 @@ diff -r 9191227a0bdc -r ba1c49944750 sbin/ipfw/main.c
  );
  
  	exit(0);
-diff -r 9191227a0bdc -r ba1c49944750 share/man/man4/if_bridge.4
---- a/share/man/man4/if_bridge.4	Fri May 15 20:17:22 2009 +0300
-+++ b/share/man/man4/if_bridge.4	Fri May 15 20:42:53 2009 +0300
-@@ -171,6 +171,14 @@
+diff --git a/share/man/man4/if_bridge.4 b/share/man/man4/if_bridge.4
+index 0a8e1dc..3cfe208 100644
+--- a/share/man/man4/if_bridge.4
++++ b/share/man/man4/if_bridge.4
+@@ -171,6 +171,14 @@ Set to
  to only allow IP packets to pass (subject to firewall rules), set to
  .Li 0
  to unconditionally pass all non-IP Ethernet frames.
@@ -1831,7 +1856,7 @@ diff -r 9191227a0bdc -r ba1c49944750 share/man/man4/if_bridge.4
  .It Va net.link.bridge.pfil_member
  Set to
  .Li 1
-@@ -192,36 +200,6 @@
+@@ -192,36 +200,6 @@ to additionally filter on the physical interface for locally destined packets.
  Set to
  .Li 0
  to disable this feature.
@@ -1868,10 +1893,11 @@ diff -r 9191227a0bdc -r ba1c49944750 share/man/man4/if_bridge.4
  .El
  .Pp
  ARP and REVARP packets are forwarded without being filtered and others
-diff -r 9191227a0bdc -r ba1c49944750 sys/contrib/pf/net/pf.c
---- a/sys/contrib/pf/net/pf.c	Fri May 15 20:17:22 2009 +0300
-+++ b/sys/contrib/pf/net/pf.c	Fri May 15 20:42:53 2009 +0300
-@@ -336,6 +336,8 @@
+diff --git a/sys/contrib/pf/net/pf.c b/sys/contrib/pf/net/pf.c
+index a44668f..3d08286 100644
+--- a/sys/contrib/pf/net/pf.c
++++ b/sys/contrib/pf/net/pf.c
+@@ -343,6 +343,8 @@ struct pf_pool_limit pf_pool_limits[PF_LIMIT_MAX] = {
  			    kif, &key, PF_LAN_EXT);			\
  		if (*state == NULL || (*state)->timeout == PFTM_PURGE)	\
  			return (PF_DROP);				\
@@ -1880,7 +1906,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/contrib/pf/net/pf.c
  		if (direction == PF_OUT &&				\
  		    (((*state)->rule.ptr->rt == PF_ROUTETO &&		\
  		    (*state)->rule.ptr->direction == PF_OUT) ||		\
-@@ -700,6 +702,34 @@
+@@ -707,6 +709,34 @@ pf_find_state_all(struct pf_state_cmp *key, u_int8_t tree, int *more)
  	}
  }
  
@@ -1915,7 +1941,20 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/contrib/pf/net/pf.c
  void
  pf_init_threshold(struct pf_threshold *threshold,
      u_int32_t limit, u_int32_t seconds)
-@@ -2107,6 +2137,26 @@
+@@ -1973,7 +2003,11 @@ pf_send_tcp(const struct pf_rule *r, sa_family_t af,
+ #endif
+ 		h->ip_ttl = ttl ? ttl : ip_defttl;
+ 		h->ip_sum = 0;
+-		if (eh == NULL) {
++		/*
++		 * XXX Condition is always true due to broken route structs
++		 * initialization in eh != NULL case.
++		 */
++		if (1 || eh == NULL) {
+ #ifdef __FreeBSD__
+ 			PF_UNLOCK();
+ 			ip_output(m, (void *)NULL, (void *)NULL, 0,
+@@ -2155,6 +2189,26 @@ pf_match_addr(u_int8_t n, struct pf_addr *a, struct pf_addr *m,
  }
  
  int
@@ -1942,7 +1981,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/contrib/pf/net/pf.c
  pf_match(u_int8_t op, u_int32_t a1, u_int32_t a2, u_int32_t p)
  {
  	switch (op) {
-@@ -3304,14 +3354,14 @@
+@@ -3352,14 +3406,14 @@ pf_test_tcp(struct pf_rule **rm, struct pf_state **sm, int direction,
  			r = r->skip[PF_SKIP_AF].ptr;
  		else if (r->proto && r->proto != IPPROTO_TCP)
  			r = r->skip[PF_SKIP_PROTO].ptr;
@@ -1961,7 +2000,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/contrib/pf/net/pf.c
  			r = r->skip[PF_SKIP_DST_ADDR].ptr;
  		else if (r->dst.port_op && !pf_match_port(r->dst.port_op,
  		    r->dst.port[0], r->dst.port[1], th->th_dport))
-@@ -3495,11 +3545,17 @@
+@@ -3546,11 +3600,17 @@ cleanup:
  		s->proto = IPPROTO_TCP;
  		s->direction = direction;
  		s->af = af;
@@ -1979,7 +2018,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/contrib/pf/net/pf.c
  			if (nr != NULL) {
  				PF_ACPY(&s->lan.addr, &pd->baddr, af);
  				s->lan.port = bport;
-@@ -3510,8 +3566,10 @@
+@@ -3561,8 +3621,10 @@ cleanup:
  		} else {
  			PF_ACPY(&s->lan.addr, daddr, af);
  			s->lan.port = th->th_dport;
@@ -1990,7 +2029,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/contrib/pf/net/pf.c
  			if (nr != NULL) {
  				PF_ACPY(&s->gwy.addr, &pd->baddr, af);
  				s->gwy.port = bport;
-@@ -3726,14 +3784,14 @@
+@@ -3777,14 +3839,14 @@ pf_test_udp(struct pf_rule **rm, struct pf_state **sm, int direction,
  			r = r->skip[PF_SKIP_AF].ptr;
  		else if (r->proto && r->proto != IPPROTO_UDP)
  			r = r->skip[PF_SKIP_PROTO].ptr;
@@ -2009,7 +2048,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/contrib/pf/net/pf.c
  			r = r->skip[PF_SKIP_DST_ADDR].ptr;
  		else if (r->dst.port_op && !pf_match_port(r->dst.port_op,
  		    r->dst.port[0], r->dst.port[1], uh->uh_dport))
-@@ -3892,11 +3950,17 @@
+@@ -3946,11 +4008,17 @@ cleanup:
  		s->proto = IPPROTO_UDP;
  		s->direction = direction;
  		s->af = af;
@@ -2027,7 +2066,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/contrib/pf/net/pf.c
  			if (nr != NULL) {
  				PF_ACPY(&s->lan.addr, &pd->baddr, af);
  				s->lan.port = bport;
-@@ -3907,8 +3971,10 @@
+@@ -3961,8 +4029,10 @@ cleanup:
  		} else {
  			PF_ACPY(&s->lan.addr, daddr, af);
  			s->lan.port = uh->uh_dport;
@@ -2038,7 +2077,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/contrib/pf/net/pf.c
  			if (nr != NULL) {
  				PF_ACPY(&s->gwy.addr, &pd->baddr, af);
  				s->gwy.port = bport;
-@@ -4083,11 +4149,11 @@
+@@ -4137,11 +4207,11 @@ pf_test_icmp(struct pf_rule **rm, struct pf_state **sm, int direction,
  			r = r->skip[PF_SKIP_AF].ptr;
  		else if (r->proto && r->proto != pd->proto)
  			r = r->skip[PF_SKIP_PROTO].ptr;
@@ -2054,7 +2093,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/contrib/pf/net/pf.c
  			r = r->skip[PF_SKIP_DST_ADDR].ptr;
  		else if (r->type && r->type != icmptype + 1)
  			r = TAILQ_NEXT(r, entries);
-@@ -4205,11 +4271,17 @@
+@@ -4262,11 +4332,17 @@ cleanup:
  		s->proto = pd->proto;
  		s->direction = direction;
  		s->af = af;
@@ -2072,7 +2111,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/contrib/pf/net/pf.c
  			if (nr != NULL) {
  				PF_ACPY(&s->lan.addr, &pd->baddr, af);
  				s->lan.port = bport;
-@@ -4220,8 +4292,10 @@
+@@ -4277,8 +4353,10 @@ cleanup:
  		} else {
  			PF_ACPY(&s->lan.addr, daddr, af);
  			s->lan.port = nport;
@@ -2083,7 +2122,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/contrib/pf/net/pf.c
  			if (nr != NULL) {
  				PF_ACPY(&s->gwy.addr, &pd->baddr, af);
  				s->gwy.port = bport;
-@@ -4346,11 +4420,11 @@
+@@ -4403,11 +4481,11 @@ pf_test_other(struct pf_rule **rm, struct pf_state **sm, int direction,
  			r = r->skip[PF_SKIP_AF].ptr;
  		else if (r->proto && r->proto != pd->proto)
  			r = r->skip[PF_SKIP_PROTO].ptr;
@@ -2099,7 +2138,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/contrib/pf/net/pf.c
  			r = r->skip[PF_SKIP_DST_ADDR].ptr;
  		else if (r->tos && !(r->tos == pd->tos))
  			r = TAILQ_NEXT(r, entries);
-@@ -4492,16 +4566,24 @@
+@@ -4552,16 +4630,24 @@ cleanup:
  		s->proto = pd->proto;
  		s->direction = direction;
  		s->af = af;
@@ -2124,7 +2163,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/contrib/pf/net/pf.c
  			if (nr != NULL)
  				PF_ACPY(&s->gwy.addr, &pd->baddr, af);
  			else
-@@ -4563,11 +4645,11 @@
+@@ -4623,11 +4709,11 @@ pf_test_fragment(struct pf_rule **rm, int direction, struct pfi_kif *kif,
  			r = r->skip[PF_SKIP_AF].ptr;
  		else if (r->proto && r->proto != pd->proto)
  			r = r->skip[PF_SKIP_PROTO].ptr;
@@ -2140,7 +2179,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/contrib/pf/net/pf.c
  			r = r->skip[PF_SKIP_DST_ADDR].ptr;
  		else if (r->tos && !(r->tos == pd->tos))
  			r = TAILQ_NEXT(r, entries);
-@@ -6855,6 +6937,12 @@
+@@ -7014,6 +7100,12 @@ pf_test(int dir, struct ifnet *ifp, struct mbuf **m0,
  	pd.tos = h->ip_tos;
  	pd.tot_len = ntohs(h->ip_len);
  	pd.eh = eh;
@@ -2153,7 +2192,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/contrib/pf/net/pf.c
  
  	/* handle fragments that didn't get reassembled by normalization */
  	if (h->ip_off & htons(IP_MF | IP_OFFMASK)) {
-@@ -7249,6 +7337,12 @@
+@@ -7408,6 +7500,12 @@ pf_test6(int dir, struct ifnet *ifp, struct mbuf **m0,
  	pd.tos = 0;
  	pd.tot_len = ntohs(h->ip6_plen) + sizeof(struct ip6_hdr);
  	pd.eh = eh;
@@ -2166,10 +2205,11 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/contrib/pf/net/pf.c
  
  	off = ((caddr_t)h - m->m_data) + sizeof(struct ip6_hdr);
  	pd.proto = h->ip6_nxt;
-diff -r 9191227a0bdc -r ba1c49944750 sys/contrib/pf/net/pf_ioctl.c
---- a/sys/contrib/pf/net/pf_ioctl.c	Fri May 15 20:17:22 2009 +0300
-+++ b/sys/contrib/pf/net/pf_ioctl.c	Fri May 15 20:42:53 2009 +0300
-@@ -111,6 +111,7 @@
+diff --git a/sys/contrib/pf/net/pf_ioctl.c b/sys/contrib/pf/net/pf_ioctl.c
+index 9124404..2465f20 100644
+--- a/sys/contrib/pf/net/pf_ioctl.c
++++ b/sys/contrib/pf/net/pf_ioctl.c
+@@ -111,6 +111,7 @@ __FBSDID("$FreeBSD$");
  
  #ifdef __FreeBSD__
  #include <sys/md5.h>
@@ -2177,7 +2217,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/contrib/pf/net/pf_ioctl.c
  #else
  #include <dev/rndvar.h>
  #include <crypto/md5.h>
-@@ -3636,6 +3637,7 @@
+@@ -3636,6 +3637,7 @@ pf_check_in(void *arg, struct mbuf **m, struct ifnet *ifp, int dir,
  	 * byte order. 
  	 */
  	struct ip *h = NULL;
@@ -2185,7 +2225,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/contrib/pf/net/pf_ioctl.c
  	int chk;
  
  	if ((*m)->m_pkthdr.len >= (int)sizeof(struct ip)) {
-@@ -3644,7 +3646,10 @@
+@@ -3644,7 +3646,10 @@ pf_check_in(void *arg, struct mbuf **m, struct ifnet *ifp, int dir,
  	        HTONS(h->ip_len);
  	        HTONS(h->ip_off);
  	}
@@ -2197,7 +2237,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/contrib/pf/net/pf_ioctl.c
  	if (chk && *m) {
  		m_freem(*m);
  		*m = NULL;
-@@ -3671,6 +3676,7 @@
+@@ -3671,6 +3676,7 @@ pf_check_out(void *arg, struct mbuf **m, struct ifnet *ifp, int dir,
  	 * byte order. 
  	 */
  	struct ip *h = NULL;
@@ -2205,7 +2245,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/contrib/pf/net/pf_ioctl.c
  	int chk;
  
  	/* We need a proper CSUM befor we start (s. OpenBSD ip_output) */
-@@ -3684,7 +3690,10 @@
+@@ -3684,7 +3690,10 @@ pf_check_out(void *arg, struct mbuf **m, struct ifnet *ifp, int dir,
  	        HTONS(h->ip_len);
  	        HTONS(h->ip_off);
  	}
@@ -2217,7 +2257,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/contrib/pf/net/pf_ioctl.c
  	if (chk && *m) {
  		m_freem(*m);
  		*m = NULL;
-@@ -3706,6 +3715,7 @@
+@@ -3706,6 +3715,7 @@ pf_check6_in(void *arg, struct mbuf **m, struct ifnet *ifp, int dir,
  	/*
  	 * IPv6 is not affected by ip_len/ip_off byte order changes.
  	 */
@@ -2225,7 +2265,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/contrib/pf/net/pf_ioctl.c
  	int chk;
  
  	/*
-@@ -3713,8 +3723,10 @@
+@@ -3713,8 +3723,10 @@ pf_check6_in(void *arg, struct mbuf **m, struct ifnet *ifp, int dir,
  	 * order to support scoped addresses. In order to support stateful
  	 * filtering we have change this to lo0 as it is the case in IPv4.
  	 */
@@ -2237,7 +2277,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/contrib/pf/net/pf_ioctl.c
  	if (chk && *m) {
  		m_freem(*m);
  		*m = NULL;
-@@ -3729,6 +3741,7 @@
+@@ -3729,6 +3741,7 @@ pf_check6_out(void *arg, struct mbuf **m, struct ifnet *ifp, int dir,
  	/*
  	 * IPv6 does not affected ip_len/ip_off byte order changes.
  	 */
@@ -2245,7 +2285,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/contrib/pf/net/pf_ioctl.c
  	int chk;
  
  	/* We need a proper CSUM befor we start (s. OpenBSD ip_output) */
-@@ -3736,7 +3749,10 @@
+@@ -3736,7 +3749,10 @@ pf_check6_out(void *arg, struct mbuf **m, struct ifnet *ifp, int dir,
  		in_delayed_cksum(*m);
  		(*m)->m_pkthdr.csum_flags &= ~CSUM_DELAY_DATA;
  	}
@@ -2257,10 +2297,11 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/contrib/pf/net/pf_ioctl.c
  	if (chk && *m) {
  		m_freem(*m);
  		*m = NULL;
-diff -r 9191227a0bdc -r ba1c49944750 sys/contrib/pf/net/pf_table.c
---- a/sys/contrib/pf/net/pf_table.c	Fri May 15 20:17:22 2009 +0300
-+++ b/sys/contrib/pf/net/pf_table.c	Fri May 15 20:42:53 2009 +0300
-@@ -917,6 +917,7 @@
+diff --git a/sys/contrib/pf/net/pf_table.c b/sys/contrib/pf/net/pf_table.c
+index 977f88c..8b679d2 100644
+--- a/sys/contrib/pf/net/pf_table.c
++++ b/sys/contrib/pf/net/pf_table.c
+@@ -917,6 +917,7 @@ pfr_create_kentry(struct pfr_addr *ad, int intr)
  	ke->pfrke_net = ad->pfra_net;
  	ke->pfrke_not = ad->pfra_not;
  	ke->pfrke_intrpool = intr;
@@ -2268,7 +2309,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/contrib/pf/net/pf_table.c
  	return (ke);
  }
  
-@@ -1145,6 +1146,7 @@
+@@ -1145,6 +1146,7 @@ pfr_copyout_addr(struct pfr_addr *ad, struct pfr_kentry *ke)
  		ad->pfra_ip4addr = ke->pfrke_sa.sin.sin_addr;
  	else if (ad->pfra_af == AF_INET6)
  		ad->pfra_ip6addr = ke->pfrke_sa.sin6.sin6_addr;
@@ -2276,7 +2317,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/contrib/pf/net/pf_table.c
  }
  
  int
-@@ -2089,6 +2091,12 @@
+@@ -2089,6 +2091,12 @@ pfr_lookup_table(struct pfr_table *tbl)
  int
  pfr_match_addr(struct pfr_ktable *kt, struct pf_addr *a, sa_family_t af)
  {
@@ -2289,7 +2330,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/contrib/pf/net/pf_table.c
  	struct pfr_kentry	*ke = NULL;
  	int			 match;
  
-@@ -2115,7 +2123,10 @@
+@@ -2115,7 +2123,10 @@ pfr_match_addr(struct pfr_ktable *kt, struct pf_addr *a, sa_family_t af)
  		break;
  #endif /* INET6 */
  	}
@@ -2301,10 +2342,11 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/contrib/pf/net/pf_table.c
  	if (match)
  		kt->pfrkt_match++;
  	else
-diff -r 9191227a0bdc -r ba1c49944750 sys/contrib/pf/net/pfvar.h
---- a/sys/contrib/pf/net/pfvar.h	Fri May 15 20:17:22 2009 +0300
-+++ b/sys/contrib/pf/net/pfvar.h	Fri May 15 20:42:53 2009 +0300
-@@ -165,6 +165,14 @@
+diff --git a/sys/contrib/pf/net/pfvar.h b/sys/contrib/pf/net/pfvar.h
+index dc5dc40..3d39748 100644
+--- a/sys/contrib/pf/net/pfvar.h
++++ b/sys/contrib/pf/net/pfvar.h
+@@ -165,6 +165,14 @@ struct pf_addr {
  #define PFI_AFLAG_MODEMASK	0x07
  #define PFI_AFLAG_NOALIAS	0x08
  
@@ -2319,7 +2361,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/contrib/pf/net/pfvar.h
  struct pf_addr_wrap {
  	union {
  		struct {
-@@ -185,6 +193,7 @@
+@@ -185,6 +193,7 @@ struct pf_addr_wrap {
  		int			 dyncnt;
  		int			 tblcnt;
  	}			 p;
@@ -2327,7 +2369,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/contrib/pf/net/pfvar.h
  	u_int8_t		 type;		/* PF_ADDR_* */
  	u_int8_t		 iflags;	/* PFI_AFLAG_* */
  };
-@@ -401,7 +410,7 @@
+@@ -401,7 +410,7 @@ extern void destroy_pf_mutex(void);
  #endif /* PF_INET6_ONLY */
  #endif /* PF_INET_INET6 */
  
@@ -2336,7 +2378,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/contrib/pf/net/pfvar.h
  	(								\
  		(((aw)->type == PF_ADDR_NOROUTE &&			\
  		    pf_routable((x), (af), NULL)) ||			\
-@@ -410,16 +419,25 @@
+@@ -410,16 +419,25 @@ extern void destroy_pf_mutex(void);
  		((aw)->type == PF_ADDR_RTLABEL &&			\
  		    !pf_rtlabel_match((x), (af), (aw))) ||		\
  		((aw)->type == PF_ADDR_TABLE &&				\
@@ -2367,7 +2409,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/contrib/pf/net/pfvar.h
  
  struct pf_rule_uid {
  	uid_t		 uid[2];
-@@ -690,6 +708,7 @@
+@@ -690,6 +708,7 @@ struct pf_rule {
  #define	PFRULE_NOSYNC		0x0010
  #define PFRULE_SRCTRACK		0x0020  /* track source states */
  #define PFRULE_RULESRCTRACK	0x0040  /* per rule */
@@ -2375,7 +2417,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/contrib/pf/net/pfvar.h
  
  /* scrub flags */
  #define	PFRULE_NODF		0x0100
-@@ -752,6 +771,8 @@
+@@ -753,6 +772,8 @@ struct pf_state_scrub {
  
  struct pf_state_host {
  	struct pf_addr	addr;
@@ -2384,7 +2426,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/contrib/pf/net/pfvar.h
  	u_int16_t	port;
  	u_int16_t	pad;
  };
-@@ -796,6 +817,7 @@
+@@ -797,6 +818,7 @@ struct pf_state {
  #ifdef __FreeBSD__
  	u_int8_t	 local_flags;
  #define	PFSTATE_EXPIRING 0x01
@@ -2392,7 +2434,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/contrib/pf/net/pfvar.h
  #else
  	u_int8_t	 pad;
  #endif
-@@ -902,6 +924,7 @@
+@@ -905,6 +927,7 @@ struct pfr_addr {
  	u_int8_t	 pfra_net;
  	u_int8_t	 pfra_not;
  	u_int8_t	 pfra_fback;
@@ -2400,7 +2442,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/contrib/pf/net/pfvar.h
  };
  #define	pfra_ip4addr	pfra_u._pfra_ip4addr
  #define	pfra_ip6addr	pfra_u._pfra_ip6addr
-@@ -945,6 +968,7 @@
+@@ -948,6 +971,7 @@ SLIST_HEAD(pfr_kentryworkq, pfr_kentry);
  struct pfr_kentry {
  	struct radix_node	 pfrke_node[2];
  	union sockaddr_union	 pfrke_sa;
@@ -2408,7 +2450,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/contrib/pf/net/pfvar.h
  	u_int64_t		 pfrke_packets[PFR_DIR_MAX][PFR_OP_ADDR_MAX];
  	u_int64_t		 pfrke_bytes[PFR_DIR_MAX][PFR_OP_ADDR_MAX];
  	SLIST_ENTRY(pfr_kentry)	 pfrke_workq;
-@@ -1054,6 +1078,10 @@
+@@ -1057,6 +1081,10 @@ struct pf_pdesc {
  	struct pf_addr	*dst;
  	struct ether_header
  			*eh;
@@ -2419,7 +2461,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/contrib/pf/net/pfvar.h
  	struct pf_mtag	*pf_mtag;
  	u_int16_t	*ip_sum;
  	u_int32_t	 p_len;		/* total length of payload */
-@@ -1650,6 +1678,7 @@
+@@ -1658,6 +1686,7 @@ int	pflog_packet(struct pfi_kif *, struct mbuf *, sa_family_t, u_int8_t,
  	    struct pf_pdesc *);
  int	pf_match_addr(u_int8_t, struct pf_addr *, struct pf_addr *,
  	    struct pf_addr *, sa_family_t);
@@ -2427,7 +2469,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/contrib/pf/net/pfvar.h
  int	pf_match(u_int8_t, u_int32_t, u_int32_t, u_int32_t);
  int	pf_match_port(u_int8_t, u_int16_t, u_int16_t, u_int16_t);
  int	pf_match_uid(u_int8_t, uid_t, uid_t, uid_t);
-@@ -1680,6 +1709,7 @@
+@@ -1688,6 +1717,7 @@ int	pf_socket_lookup(int, struct pf_pdesc *);
  #endif
  void	pfr_initialize(void);
  int	pfr_match_addr(struct pfr_ktable *, struct pf_addr *, sa_family_t);
@@ -2435,10 +2477,11 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/contrib/pf/net/pfvar.h
  void	pfr_update_stats(struct pfr_ktable *, struct pf_addr *, sa_family_t,
  	    u_int64_t, int, int, int);
  int	pfr_pool_get(struct pfr_ktable *, int *, struct pf_addr *,
-diff -r 9191227a0bdc -r ba1c49944750 sys/net/ethernet.h
---- a/sys/net/ethernet.h	Fri May 15 20:17:22 2009 +0300
-+++ b/sys/net/ethernet.h	Fri May 15 20:42:53 2009 +0300
-@@ -367,6 +367,10 @@
+diff --git a/sys/net/ethernet.h b/sys/net/ethernet.h
+index 685f3d6..bc6b5e4 100644
+--- a/sys/net/ethernet.h
++++ b/sys/net/ethernet.h
+@@ -367,6 +367,10 @@ CTASSERT(sizeof (struct ether_addr) == ETHER_ADDR_LEN);
  } while (0)
  
  #ifdef _KERNEL
@@ -2449,7 +2492,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/net/ethernet.h
  
  struct ifnet;
  struct mbuf;
-@@ -388,6 +392,8 @@
+@@ -388,6 +392,8 @@ void	ether_vlan_mtap(struct bpf_if *, struct mbuf *,
  	    void *, u_int);
  struct mbuf  *ether_vlanencap(struct mbuf *, uint16_t);
  
@@ -2458,22 +2501,24 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/net/ethernet.h
  #else /* _KERNEL */
  
  #include <sys/cdefs.h>
-diff -r 9191227a0bdc -r ba1c49944750 sys/net/if.h
---- a/sys/net/if.h	Fri May 15 20:17:22 2009 +0300
-+++ b/sys/net/if.h	Fri May 15 20:42:53 2009 +0300
-@@ -150,6 +150,8 @@
- #define	IFF_MONITOR	0x40000		/* (n) user-requested monitor mode */
+diff --git a/sys/net/if.h b/sys/net/if.h
+index 6c0ad38..03da920 100644
+--- a/sys/net/if.h
++++ b/sys/net/if.h
+@@ -151,6 +151,8 @@ struct if_data {
  #define	IFF_STATICARP	0x80000		/* (n) static ARP */
  #define	IFF_NEEDSGIANT	0x100000	/* (i) hold Giant over if_start calls */
-+#define	IFF_L2FILTER	0x200000	/* (n) perform layer2 filtering on interface */
-+#define	IFF_L2TAG	0x400000	/* (n) tag packets with layer2 header */
+ #define	IFF_RENAMING	0x400000	/* (n) interface is being renamed */
++#define	IFF_L2FILTER	0x800000	/* (n) perform layer2 filtering on */
++#define	IFF_L2TAG	0x1000000	/* (n) tag packets with layer2 header */
  
  /*
   * Old names for driver flags so that user space tools can continue to use
-diff -r 9191227a0bdc -r ba1c49944750 sys/net/if_bridge.c
---- a/sys/net/if_bridge.c	Fri May 15 20:17:22 2009 +0300
-+++ b/sys/net/if_bridge.c	Fri May 15 20:42:53 2009 +0300
-@@ -124,6 +124,7 @@
+diff --git a/sys/net/if_bridge.c b/sys/net/if_bridge.c
+index be954e7..f8d8fc2 100644
+--- a/sys/net/if_bridge.c
++++ b/sys/net/if_bridge.c
+@@ -124,6 +124,7 @@ __FBSDID("$FreeBSD$");
  #include <machine/in_cksum.h>
  #include <netinet/if_ether.h> /* for struct arpcom */
  #include <net/bridgestp.h>
@@ -2481,7 +2526,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/net/if_bridge.c
  #include <net/if_bridgevar.h>
  #include <net/if_llc.h>
  #include <net/if_vlan_var.h>
-@@ -344,15 +345,14 @@
+@@ -344,15 +345,14 @@ SYSCTL_NODE(_net_link, IFT_BRIDGE, bridge, CTLFLAG_RW, 0, "Bridge");
  static int pfil_onlyip = 1; /* only pass IP[46] packets when pfil is enabled */
  static int pfil_bridge = 1; /* run pfil hooks on the bridge interface */
  static int pfil_member = 1; /* run pfil hooks on the member interface */
@@ -2500,7 +2545,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/net/if_bridge.c
  SYSCTL_INT(_net_link_bridge, OID_AUTO, pfil_bridge, CTLFLAG_RW,
      &pfil_bridge, 0, "Packet filter on the bridge interface");
  SYSCTL_INT(_net_link_bridge, OID_AUTO, pfil_member, CTLFLAG_RW,
-@@ -510,39 +510,6 @@
+@@ -510,39 +510,6 @@ DECLARE_MODULE(if_bridge, bridge_mod, SI_SUB_PSEUDO, SI_ORDER_ANY);
  MODULE_DEPEND(if_bridge, bridgestp, 1, 1, 1);
  
  /*
@@ -2540,7 +2585,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/net/if_bridge.c
   * bridge_clone_create:
   *
   *	Create a new bridge instance.
-@@ -1755,23 +1722,26 @@
+@@ -1755,23 +1722,26 @@ bridge_dummynet(struct mbuf *m, struct ifnet *ifp)
  {
  	struct bridge_softc *sc;
  
@@ -2576,7 +2621,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/net/if_bridge.c
  		if (bridge_pfil(&m, sc->sc_ifp, ifp, PFIL_OUT) != 0)
  			return;
  		if (m == NULL)
-@@ -2900,7 +2870,7 @@
+@@ -2900,7 +2870,7 @@ bridge_pfil(struct mbuf **mp, struct ifnet *bifp, struct ifnet *ifp, int dir)
  {
  	int snap, error, i, hlen;
  	struct ether_header *eh1, eh2;
@@ -2585,7 +2630,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/net/if_bridge.c
  	struct ip *ip;
  	struct llc llc1;
  	u_int16_t ether_type;
-@@ -2913,7 +2883,7 @@
+@@ -2913,7 +2883,7 @@ bridge_pfil(struct mbuf **mp, struct ifnet *bifp, struct ifnet *ifp, int dir)
  	KASSERT(M_WRITABLE(*mp), ("%s: modifying a shared mbuf", __func__));
  #endif
  
@@ -2594,7 +2639,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/net/if_bridge.c
  		return (0); /* filtering is disabled */
  
  	i = min((*mp)->m_pkthdr.len, max_protohdr);
-@@ -2955,7 +2925,7 @@
+@@ -2955,7 +2925,7 @@ bridge_pfil(struct mbuf **mp, struct ifnet *bifp, struct ifnet *ifp, int dir)
  	switch (ether_type) {
  		case ETHERTYPE_ARP:
  		case ETHERTYPE_REVARP:
@@ -2603,7 +2648,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/net/if_bridge.c
  				return (0); /* Automatically pass */
  			break;
  
-@@ -2974,6 +2944,13 @@
+@@ -2974,6 +2944,13 @@ bridge_pfil(struct mbuf **mp, struct ifnet *bifp, struct ifnet *ifp, int dir)
  				goto bad;
  	}
  
@@ -2617,7 +2662,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/net/if_bridge.c
  	/* Strip off the Ethernet header and keep a copy. */
  	m_copydata(*mp, 0, ETHER_HDR_LEN, (caddr_t) &eh2);
  	m_adj(*mp, ETHER_HDR_LEN);
-@@ -3004,47 +2981,22 @@
+@@ -3004,47 +2981,22 @@ bridge_pfil(struct mbuf **mp, struct ifnet *bifp, struct ifnet *ifp, int dir)
  			goto bad;
  	}
  
@@ -2626,8 +2671,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/net/if_bridge.c
 -		args.rule = ip_dn_claim_rule(*mp);
 -		if (args.rule != NULL && fw_one_pass)
 -			goto ipfwpass; /* packet already partially processed */
-+	error = 0;
- 
+-
 -		args.m = *mp;
 -		args.oif = ifp;
 -		args.next_hop = NULL;
@@ -2646,7 +2690,8 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/net/if_bridge.c
 -			if (*mp == NULL)
 -				return (error);
 -			bcopy(&eh2, mtod(*mp, caddr_t), ETHER_HDR_LEN);
--
++	error = 0;
+ 
 -			/*
 -			 * Pass the pkt to dummynet, which consumes it. The
 -			 * packet will return to us via bridge_dummynet().
@@ -2677,7 +2722,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/net/if_bridge.c
  	/*
  	 * Run the packet through pfil
  	 */
-@@ -3080,9 +3032,21 @@
+@@ -3080,9 +3032,21 @@ ipfwpass:
  		if (*mp == NULL || error != 0) /* filter may consume */
  			break;
  
@@ -2700,7 +2745,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/net/if_bridge.c
  
  		if (*mp == NULL || error != 0) /* filter may consume */
  			break;
-@@ -3134,9 +3098,21 @@
+@@ -3134,9 +3098,21 @@ ipfwpass:
  		if (*mp == NULL || error != 0) /* filter may consume */
  			break;
  
@@ -2723,9 +2768,10 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/net/if_bridge.c
  		break;
  #endif
  	default:
-diff -r 9191227a0bdc -r ba1c49944750 sys/net/if_ethersubr.c
---- a/sys/net/if_ethersubr.c	Fri May 15 20:17:22 2009 +0300
-+++ b/sys/net/if_ethersubr.c	Fri May 15 20:42:53 2009 +0300
+diff --git a/sys/net/if_ethersubr.c b/sys/net/if_ethersubr.c
+index fa43ae0..86a9004 100644
+--- a/sys/net/if_ethersubr.c
++++ b/sys/net/if_ethersubr.c
 @@ -60,14 +60,13 @@
  #include <net/ethernet.h>
  #include <net/if_bridgevar.h>
@@ -2742,7 +2788,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/net/if_ethersubr.c
  #endif
  #ifdef INET6
  #include <netinet6/nd6.h>
-@@ -131,12 +130,7 @@
+@@ -131,12 +130,7 @@ MALLOC_DEFINE(M_ARPCOM, "arpcom", "802.* interface internals");
  
  #define senderr(e) do { error = (e); goto bad;} while (0)
  
@@ -2756,7 +2802,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/net/if_ethersubr.c
  
  /*
   * Ethernet output routine.
-@@ -383,20 +377,12 @@
+@@ -383,20 +377,12 @@ bad:			if (m != NULL)
  int
  ether_output_frame(struct ifnet *ifp, struct mbuf *m)
  {
@@ -2782,7 +2828,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/net/if_ethersubr.c
  
  	/*
  	 * Queue message on interface, update output statistics if
-@@ -406,102 +392,6 @@
+@@ -406,102 +392,6 @@ ether_output_frame(struct ifnet *ifp, struct mbuf *m)
  	return (error);
  }
  
@@ -2885,7 +2931,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/net/if_ethersubr.c
  /*
   * Process a received Ethernet packet; the packet is in the
   * mbuf chain m with the ethernet header at the front.
-@@ -699,6 +589,7 @@
+@@ -699,6 +589,7 @@ void
  ether_demux(struct ifnet *ifp, struct mbuf *m)
  {
  	struct ether_header *eh;
@@ -2893,7 +2939,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/net/if_ethersubr.c
  	int isr;
  	u_short ether_type;
  #if defined(NETATALK)
-@@ -707,21 +598,16 @@
+@@ -707,21 +598,16 @@ ether_demux(struct ifnet *ifp, struct mbuf *m)
  
  	KASSERT(ifp != NULL, ("%s: NULL interface pointer", __func__));
  
@@ -2921,7 +2967,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/net/if_ethersubr.c
  	eh = mtod(m, struct ether_header *);
  	ether_type = ntohs(eh->ether_type);
  
-@@ -753,6 +639,14 @@
+@@ -753,6 +639,14 @@ ether_demux(struct ifnet *ifp, struct mbuf *m)
  		return;
  	}
  
@@ -2936,7 +2982,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/net/if_ethersubr.c
  	/*
  	 * Reset layer specific mbuf flags to avoid confusing upper layers.
  	 * Strip off Ethernet header.
-@@ -928,10 +822,6 @@
+@@ -928,10 +822,6 @@ ether_ifdetach(struct ifnet *ifp)
  
  SYSCTL_DECL(_net_link);
  SYSCTL_NODE(_net_link, IFT_ETHER, ether, CTLFLAG_RW, 0, "Ethernet");
@@ -2947,7 +2993,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/net/if_ethersubr.c
  
  #if 0
  /*
-@@ -1187,10 +1077,16 @@
+@@ -1187,10 +1077,16 @@ ether_free(void *com, u_char type)
  static int
  ether_modevent(module_t mod, int type, void *data)
  {
@@ -2964,10 +3010,11 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/net/if_ethersubr.c
  		break;
  	case MOD_UNLOAD:
  		if_deregister_com_alloc(IFT_ETHER);
-diff -r 9191227a0bdc -r ba1c49944750 sys/net/pfil.h
---- a/sys/net/pfil.h	Fri May 15 20:17:22 2009 +0300
-+++ b/sys/net/pfil.h	Fri May 15 20:42:53 2009 +0300
-@@ -63,6 +63,7 @@
+diff --git a/sys/net/pfil.h b/sys/net/pfil.h
+index d2308fd..4063e66 100644
+--- a/sys/net/pfil.h
++++ b/sys/net/pfil.h
+@@ -63,6 +63,7 @@ typedef	TAILQ_HEAD(pfil_list, packet_filter_hook) pfil_list_t;
  
  #define	PFIL_TYPE_AF		1	/* key is AF_* type */
  #define	PFIL_TYPE_IFNET		2	/* key is ifnet pointer */
@@ -2975,10 +3022,11 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/net/pfil.h
  
  struct pfil_head {
  	pfil_list_t	ph_in;
-diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_dummynet.c
---- a/sys/netinet/ip_dummynet.c	Fri May 15 20:17:22 2009 +0300
-+++ b/sys/netinet/ip_dummynet.c	Fri May 15 20:42:53 2009 +0300
-@@ -1013,7 +1013,6 @@
+diff --git a/sys/netinet/ip_dummynet.c b/sys/netinet/ip_dummynet.c
+index cad2ece..b752c07 100644
+--- a/sys/netinet/ip_dummynet.c
++++ b/sys/netinet/ip_dummynet.c
+@@ -1013,7 +1013,6 @@ find_queue(struct dn_flow_set *fs, struct ipfw_flow_id *id)
  {
      int i = 0 ; /* we need i and q for new allocations */
      struct dn_flow_queue *q, *prev;
@@ -2986,9 +3034,11 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_dummynet.c
  
      if ( !(fs->flags_fs & DN_HAVE_FLOW_MASK) )
  	q = fs->rq[0] ;
-@@ -1023,7 +1022,8 @@
+@@ -1022,8 +1021,10 @@ find_queue(struct dn_flow_set *fs, struct ipfw_flow_id *id)
+ 	id->dst_port &= fs->flow_mask.dst_port ;
  	id->src_port &= fs->flow_mask.src_port ;
  	id->proto &= fs->flow_mask.proto ;
++	id->tag &= fs->flow_mask.tag;
  	id->flags = 0 ; /* we don't care about this one */
 -	if (is_v6) {
 +	switch (id->flow_type) {
@@ -2996,7 +3046,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_dummynet.c
  	    APPLY_MASK(&id->dst_ip6, &fs->flow_mask.dst_ip6);
  	    APPLY_MASK(&id->src_ip6, &fs->flow_mask.src_ip6);
  	    id->flow_id6 &= fs->flow_mask.flow_id6;
-@@ -1051,7 +1051,8 @@
+@@ -1051,7 +1052,8 @@ find_queue(struct dn_flow_set *fs, struct ipfw_flow_id *id)
  		(id->dst_port << 1) ^ (id->src_port) ^
  		(id->proto ) ^
  		(id->flow_id6);
@@ -3006,7 +3056,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_dummynet.c
  	    id->dst_ip &= fs->flow_mask.dst_ip ;
  	    id->src_ip &= fs->flow_mask.src_ip ;
  
-@@ -1061,13 +1062,43 @@
+@@ -1061,28 +1063,63 @@ find_queue(struct dn_flow_set *fs, struct ipfw_flow_id *id)
  		( (id->src_ip >> 16 ) & 0xffff ) ^
  		(id->dst_port << 1) ^ (id->src_port) ^
  		(id->proto );
@@ -3034,7 +3084,6 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_dummynet.c
 +	    return NULL;
 +	}
 +	if (fs->flow_mask.tag) {
-+	    id->tag &= fs->flow_mask.tag;
 +	    i ^= id->tag;
  	}
  	i = i % fs->rq_size ;
@@ -3044,15 +3093,16 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_dummynet.c
  	    search_steps++;
 -	    if (is_v6 &&
 +
-+	    if (fs->flow_mask.tag && id->tag != q->id.tag)
-+		continue;
-+
 +	    if (id->flow_type == IPFW_FLOW_IP6 &&
  		    IN6_ARE_ADDR_EQUAL(&id->dst_ip6,&q->id.dst_ip6) &&  
  		    IN6_ARE_ADDR_EQUAL(&id->src_ip6,&q->id.src_ip6) &&  
  		    id->dst_port == q->id.dst_port &&
-@@ -1077,7 +1108,8 @@
- 		    id->flow_id6 == q->id.flow_id6)
+ 		    id->src_port == q->id.src_port &&
+ 		    id->proto == q->id.proto &&
+ 		    id->flags == q->id.flags &&
+-		    id->flow_id6 == q->id.flow_id6)
++		    id->flow_id6 == q->id.flow_id6 &&
++		    id->tag == q->id.tag)
  		break ; /* found */
  
 -	    if (!is_v6 && id->dst_ip == q->id.dst_ip &&
@@ -3061,22 +3111,48 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_dummynet.c
  		    id->src_ip == q->id.src_ip &&
  		    id->dst_port == q->id.dst_port &&
  		    id->src_port == q->id.src_port &&
-@@ -1085,6 +1117,11 @@
- 		    id->flags == q->id.flags)
- 		break ; /* found */
- 
-+	    if (id->flow_type == IPFW_FLOW_ETHER &&
-+		    memcmp(id->src_ether.octet, q->id.src_ether.octet, ETHER_ADDR_LEN) == 0 &&
-+		    memcmp(id->dst_ether.octet, q->id.dst_ether.octet, ETHER_ADDR_LEN) == 0)
+ 		    id->proto == q->id.proto &&
+-		    id->flags == q->id.flags)
++		    id->flags == q->id.flags &&
++		    id->tag == q->id.tag)
 +		break ; /* found */
 +
++	    if (id->flow_type == IPFW_FLOW_ETHER &&
++		    memcmp(id->src_ether.octet, q->id.src_ether.octet, ETHER_ADDR_LEN) == 0 &&
++		    memcmp(id->dst_ether.octet, q->id.dst_ether.octet, ETHER_ADDR_LEN) == 0 &&
++		    id->tag == q->id.tag)
+ 		break ; /* found */
+ 
  	    /* No match. Check if we can expire the entry */
- 	    if (pipe_expire && q->head == NULL && q->S == q->F+1 ) {
- 		/* entry is idle and not in any heap, expire it */
-diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw.h
---- a/sys/netinet/ip_fw.h	Fri May 15 20:17:22 2009 +0300
-+++ b/sys/netinet/ip_fw.h	Fri May 15 20:42:53 2009 +0300
-@@ -75,8 +75,9 @@
+@@ -1428,8 +1465,7 @@ dummynet_io(struct mbuf **m0, int dir, struct ip_fw_args *fwa)
+ 		}
+ 	}
+ done:
+-	if (head == m && dir != DN_TO_IFB_FWD && dir != DN_TO_ETH_DEMUX &&
+-	    dir != DN_TO_ETH_OUT) {	/* Fast io. */
++	if (head == m) {	/* Fast io. */
+ 		io_pkt_fast++;
+ 		if (m->m_nextpkt != NULL)
+ 			printf("dummynet: fast io: pkt chain detected!\n");
+@@ -1438,8 +1474,12 @@ done:
+ 		*m0 = NULL;		/* Normal io. */
+ 
+ 	DUMMYNET_UNLOCK();
+-	if (head != NULL)
++	if (head != NULL) {
++		printf("dummynet fast io\n");
++		MPASS(dir != DN_TO_IFB_FWD && dir != DN_TO_ETH_DEMUX &&
++		    dir != DN_TO_ETH_OUT);
+ 		dummynet_send(head);
++	}
+ 	return (0);
+ 
+ dropit:
+diff --git a/sys/netinet/ip_fw.h b/sys/netinet/ip_fw.h
+index e5528a2..4fcdf0d 100644
+--- a/sys/netinet/ip_fw.h
++++ b/sys/netinet/ip_fw.h
+@@ -75,8 +75,9 @@ enum ipfw_opcodes {		/* arguments (4 byte each)	*/
  	O_IP_DSTPORT,		/* (n)port list:mask 4 byte ea	*/
  	O_PROTO,		/* arg1=protocol		*/
  
@@ -3088,7 +3164,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw.h
  
  	O_LAYER2,		/* none				*/
  	O_IN,			/* none				*/
-@@ -131,7 +132,6 @@
+@@ -131,7 +132,6 @@ enum ipfw_opcodes {		/* arguments (4 byte each)	*/
  	O_DIVERT,		/* arg1=port number		*/
  	O_TEE,			/* arg1=port number		*/
  	O_FORWARD_IP,		/* fwd sockaddr			*/
@@ -3096,7 +3172,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw.h
  	O_NAT,                  /* nope                         */
  
  	/*
-@@ -172,6 +172,15 @@
+@@ -172,6 +172,15 @@ enum ipfw_opcodes {		/* arguments (4 byte each)	*/
  	O_SETFIB,		/* arg1=FIB number */
  	O_FIB,			/* arg1=FIB desired fib number */
  
@@ -3112,7 +3188,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw.h
  	O_LAST_OPCODE		/* not an opcode!		*/
  };
  
-@@ -269,13 +278,21 @@
+@@ -269,13 +278,21 @@ typedef struct  _ipfw_insn_sa {
  } ipfw_insn_sa;
  
  /*
@@ -3139,7 +3215,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw.h
  
  /*
   * This is used for interface match rules (recv xx, xmit xx).
-@@ -479,14 +496,20 @@
+@@ -479,14 +496,20 @@ struct ipfw_flow_id {
  	u_int8_t	fib;
  	u_int8_t	proto;
  	u_int8_t	flags;	/* protocol-specific flags */
@@ -3162,7 +3238,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw.h
  
  /*
   * Dynamic ipfw rule.
-@@ -535,10 +558,16 @@
+@@ -535,10 +558,16 @@ struct _ipfw_dyn_rule {
  #define	ICMP6_UNREACH_RST	0x100	/* fake ICMPv6 code (send a TCP RST) */
  
  /*
@@ -3179,7 +3255,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw.h
  	u_int32_t	value;		/* value			*/
  	u_int16_t	tbl;		/* table number			*/
  	u_int8_t	masklen;	/* mask length			*/
-@@ -589,6 +618,8 @@
+@@ -589,6 +618,8 @@ struct _ip6dn_args {
         struct route_in6 ro_pmtu_or;
  };
  
@@ -3188,7 +3264,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw.h
  /*
   * Arguments for calling ipfw_chk() and dummynet_io(). We put them
   * all into a structure because this way it is easier and more
-@@ -599,7 +630,8 @@
+@@ -599,7 +630,8 @@ struct ip_fw_args {
  	struct ifnet	*oif;		/* output interface		*/
  	struct sockaddr_in *next_hop;	/* forward address		*/
  	struct ip_fw	*rule;		/* matching rule		*/
@@ -3198,7 +3274,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw.h
  
  	struct ipfw_flow_id f_id;	/* grabbed from IP header	*/
  	u_int32_t	cookie;		/* a cookie depending on rule action */
-@@ -619,6 +651,8 @@
+@@ -619,6 +651,8 @@ struct dn_flow_set;
  
  int ipfw_check_in(void *, struct mbuf **, struct ifnet *, int, struct inpcb *inp);
  int ipfw_check_out(void *, struct mbuf **, struct ifnet *, int, struct inpcb *inp);
@@ -3207,7 +3283,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw.h
  
  int ipfw_chk(struct ip_fw_args *);
  
-@@ -641,11 +675,16 @@
+@@ -641,11 +675,16 @@ extern	ip_fw_chk_t	*ip_fw_chk_ptr;
  #ifdef IPFW_INTERNAL
  
  #define        IPFW_TABLES_MAX         128
@@ -3225,10 +3301,11 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw.h
         struct rwlock   rwmtx;
  };
  #define        IPFW_LOCK_INIT(_chain) \
-diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
---- a/sys/netinet/ip_fw2.c	Fri May 15 20:17:22 2009 +0300
-+++ b/sys/netinet/ip_fw2.c	Fri May 15 20:42:53 2009 +0300
-@@ -56,6 +56,7 @@
+diff --git a/sys/netinet/ip_fw2.c b/sys/netinet/ip_fw2.c
+index 18093f7..270324d 100644
+--- a/sys/netinet/ip_fw2.c
++++ b/sys/netinet/ip_fw2.c
+@@ -56,6 +56,7 @@ __FBSDID("$FreeBSD$");
  #include <sys/module.h>
  #include <sys/priv.h>
  #include <sys/proc.h>
@@ -3236,7 +3313,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  #include <sys/socket.h>
  #include <sys/socketvar.h>
  #include <sys/sysctl.h>
-@@ -63,6 +64,7 @@
+@@ -63,6 +64,7 @@ __FBSDID("$FreeBSD$");
  #include <sys/ucred.h>
  #include <net/ethernet.h> /* for ETHERTYPE_IP */
  #include <net/if.h>
@@ -3244,7 +3321,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  #include <net/radix.h>
  #include <net/route.h>
  #include <net/pf_mtag.h>
-@@ -140,9 +142,47 @@
+@@ -145,9 +147,47 @@ ipfw_nat_cfg_t *ipfw_nat_del_ptr;
  ipfw_nat_cfg_t *ipfw_nat_get_cfg_ptr;
  ipfw_nat_cfg_t *ipfw_nat_get_log_ptr;
  
@@ -3294,7 +3371,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  	u_int32_t		value;
  };
  
-@@ -713,18 +753,6 @@
+@@ -721,18 +761,6 @@ send_reject6(struct ip_fw_args *args, int code, u_int hlen, struct ip6_hdr *ip6)
  		 */
  		tcp_respond(NULL, ip6, tcp, m, ack, seq, flags);
  	} else if (code != ICMP6_UNREACH_RST) { /* Send an ICMPv6 unreach. */
@@ -3313,7 +3390,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  		icmp6_error(m, ICMP6_DST_UNREACH, code, 0);
  	} else
  		m_freem(m);
-@@ -748,7 +776,6 @@
+@@ -756,7 +784,6 @@ ipfw_log(struct ip_fw *f, u_int hlen, struct ip_fw_args *args,
      struct mbuf *m, struct ifnet *oif, u_short offset, uint32_t tablearg,
      struct ip *ip)
  {
@@ -3321,7 +3398,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  	char *action;
  	int limit_reached = 0;
  	char action2[40], proto[128], fragment[32];
-@@ -875,23 +902,24 @@
+@@ -883,23 +910,24 @@ ipfw_log(struct ip_fw *f, u_int hlen, struct ip_fw_args *args,
  	}
  
  	if (hlen == 0) {	/* non-ip */
@@ -3343,24 +3420,22 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  #endif
  		src[0] = '\0';
  		dst[0] = '\0';
--#ifdef INET6
++		switch (args->f_id.flow_type) {
+ #ifdef INET6
 -		if (IS_IP6_FLOW_ID(&(args->f_id))) {
 -			char ip6buf[INET6_ADDRSTRLEN];
-+		switch (args->f_id.flow_type) {
-+#ifdef INET6
 +		case IPFW_FLOW_IP6:
  			snprintf(src, sizeof(src), "[%s]",
  			    ip6_sprintf(ip6buf, &args->f_id.src_ip6));
  			snprintf(dst, sizeof(dst), "[%s]",
-@@ -900,14 +928,24 @@
+@@ -908,14 +936,24 @@ ipfw_log(struct ip_fw *f, u_int hlen, struct ip_fw_args *args,
  			ip6 = (struct ip6_hdr *)ip;
  			tcp = (struct tcphdr *)(((char *)ip) + hlen);
  			udp = (struct udphdr *)(((char *)ip) + hlen);
 -		} else
--#endif
--		{
 +			break;
-+#endif
+ #endif
+-		{
 +		case IPFW_FLOW_IP4:
  			tcp = L3HDR(struct tcphdr, ip);
  			udp = L3HDR(struct udphdr, ip);
@@ -3380,7 +3455,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  		}
  
  		switch (args->f_id.proto) {
-@@ -965,7 +1003,7 @@
+@@ -973,7 +1011,7 @@ ipfw_log(struct ip_fw *f, u_int hlen, struct ip_fw_args *args,
  		}
  
  #ifdef INET6
@@ -3389,7 +3464,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  			if (offset & (IP6F_OFF_MASK | IP6F_MORE_FRAG))
  				snprintf(SNPARGS(fragment, 0),
  				    " (frag %08x:%d@%d%s)",
-@@ -975,15 +1013,10 @@
+@@ -983,15 +1021,10 @@ ipfw_log(struct ip_fw *f, u_int hlen, struct ip_fw_args *args,
  				    (offset & IP6F_MORE_FRAG) ? "+" : "");
  		} else
  #endif
@@ -3408,7 +3483,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  			if (ip_off & (IP_MF | IP_OFFMASK))
  				snprintf(SNPARGS(fragment, 0),
  				    " (frag %d:%d@%d%s)",
-@@ -1021,7 +1054,7 @@
+@@ -1029,7 +1062,7 @@ hash_packet(struct ipfw_flow_id *id)
  	u_int32_t i;
  
  #ifdef INET6
@@ -3417,7 +3492,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  		i = hash_packet6(id);
  	else
  #endif /* INET6 */
-@@ -1164,7 +1197,7 @@
+@@ -1172,7 +1205,7 @@ lookup_dyn_rule_locked(struct ipfw_flow_id *pkt, int *match_direction,
  		}
  		if (pkt->proto == q->id.proto &&
  		    q->dyn_type != O_LIMIT_PARENT) {
@@ -3426,7 +3501,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  			    if (IN6_ARE_ADDR_EQUAL(&(pkt->src_ip6),
  				&(q->id.src_ip6)) &&
  			    IN6_ARE_ADDR_EQUAL(&(pkt->dst_ip6),
-@@ -1183,7 +1216,7 @@
+@@ -1191,7 +1224,7 @@ lookup_dyn_rule_locked(struct ipfw_flow_id *pkt, int *match_direction,
  				    dir = MATCH_REVERSE;
  				    break;
  			    }
@@ -3435,7 +3510,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  			    if (pkt->src_ip == q->id.src_ip &&
  				pkt->dst_ip == q->id.dst_ip &&
  				pkt->src_port == q->id.src_port &&
-@@ -1207,7 +1240,21 @@
+@@ -1215,7 +1248,21 @@ next:
  	if (q == NULL)
  		goto done; /* q = NULL, not found */
  
@@ -3458,7 +3533,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  		prev->next = q->next;
  		q->next = ipfw_dyn_v[i];
  		ipfw_dyn_v[i] = q;
-@@ -1284,6 +1331,13 @@
+@@ -1292,6 +1339,13 @@ lookup_dyn_rule(struct ipfw_flow_id *pkt, int *match_direction,
  {
  	ipfw_dyn_rule *q;
  
@@ -3472,7 +3547,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  	IPFW_DYN_LOCK();
  	q = lookup_dyn_rule_locked(pkt, match_direction, tcp);
  	if (q == NULL)
-@@ -1332,7 +1386,7 @@
+@@ -1340,7 +1394,7 @@ realloc_dynamic_table(void)
   * - "parent" rules for the above (O_LIMIT_PARENT).
   */
  static ipfw_dyn_rule *
@@ -3481,7 +3556,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  {
  	ipfw_dyn_rule *r;
  	int i;
-@@ -1364,6 +1418,10 @@
+@@ -1372,6 +1426,10 @@ add_dyn_rule(struct ipfw_flow_id *id, u_int8_t dyn_type, struct ip_fw *rule)
  	}
  
  	r->id = *id;
@@ -3492,7 +3567,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  	r->expire = time_uptime + dyn_syn_lifetime;
  	r->rule = rule;
  	r->dyn_type = dyn_type;
-@@ -1387,7 +1445,7 @@
+@@ -1395,7 +1453,7 @@ add_dyn_rule(struct ipfw_flow_id *id, u_int8_t dyn_type, struct ip_fw *rule)
   * If the lookup fails, then install one.
   */
  static ipfw_dyn_rule *
@@ -3501,7 +3576,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  {
  	ipfw_dyn_rule *q;
  	int i;
-@@ -1395,7 +1453,7 @@
+@@ -1403,7 +1461,7 @@ lookup_dyn_parent(struct ipfw_flow_id *pkt, struct ip_fw *rule)
  	IPFW_DYN_LOCK_ASSERT();
  
  	if (ipfw_dyn_v) {
@@ -3510,7 +3585,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  		i = hash_packet( pkt );
  		for (q = ipfw_dyn_v[i] ; q != NULL ; q=q->next)
  			if (q->dyn_type == O_LIMIT_PARENT &&
-@@ -1419,7 +1477,7 @@
+@@ -1427,7 +1485,7 @@ lookup_dyn_parent(struct ipfw_flow_id *pkt, struct ip_fw *rule)
  				return q;
  			}
  	}
@@ -3519,7 +3594,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  }
  
  /**
-@@ -1429,7 +1487,7 @@
+@@ -1437,7 +1495,7 @@ lookup_dyn_parent(struct ipfw_flow_id *pkt, struct ip_fw *rule)
   * session limitations are enforced.
   */
  static int
@@ -3528,7 +3603,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
      struct ip_fw_args *args, uint32_t tablearg)
  {
  	static int last_log;
-@@ -1437,6 +1495,13 @@
+@@ -1445,6 +1503,13 @@ install_state(struct ip_fw *rule, ipfw_insn_limit *cmd,
  	struct in_addr da;
  	char src[48], dst[48];
  
@@ -3542,7 +3617,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  	src[0] = '\0';
  	dst[0] = '\0';
  
-@@ -1476,7 +1541,7 @@
+@@ -1484,7 +1549,7 @@ install_state(struct ip_fw *rule, ipfw_insn_limit *cmd,
  
  	switch (cmd->o.opcode) {
  	case O_KEEP_STATE:	/* bidir rule */
@@ -3551,7 +3626,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  		break;
  
  	case O_LIMIT: {		/* limit number of sessions */
-@@ -1499,10 +1564,10 @@
+@@ -1507,10 +1572,10 @@ install_state(struct ip_fw *rule, ipfw_insn_limit *cmd,
  
  		id.dst_ip = id.src_ip = id.dst_port = id.src_port = 0;
  		id.proto = args->f_id.proto;
@@ -3564,7 +3639,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  			if (limit_mask & DYN_SRC_ADDR)
  				id.src_ip6 = args->f_id.src_ip6;
  			if (limit_mask & DYN_DST_ADDR)
-@@ -1517,7 +1582,7 @@
+@@ -1525,7 +1590,7 @@ install_state(struct ip_fw *rule, ipfw_insn_limit *cmd,
  			id.src_port = args->f_id.src_port;
  		if (limit_mask & DYN_DST_PORT)
  			id.dst_port = args->f_id.dst_port;
@@ -3573,7 +3648,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  			printf("ipfw: %s: add parent failed\n", __func__);
  			IPFW_DYN_UNLOCK();
  			return (1);
-@@ -1534,7 +1599,7 @@
+@@ -1542,7 +1607,7 @@ install_state(struct ip_fw *rule, ipfw_insn_limit *cmd,
  					 * XXX IPv6 flows are not
  					 * supported yet.
  					 */
@@ -3582,7 +3657,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  						char ip6buf[INET6_ADDRSTRLEN];
  						snprintf(src, sizeof(src),
  						    "[%s]", ip6_sprintf(ip6buf,
-@@ -1564,7 +1629,7 @@
+@@ -1572,7 +1637,7 @@ install_state(struct ip_fw *rule, ipfw_insn_limit *cmd,
  				return (1);
  			}
  		}
@@ -3591,7 +3666,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  		break;
  	}
  	default:
-@@ -1683,22 +1748,7 @@
+@@ -1691,22 +1756,7 @@ static void
  send_reject(struct ip_fw_args *args, int code, int ip_len, struct ip *ip)
  {
  
@@ -3614,7 +3689,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  		icmp_error(args->m, ICMP_UNREACH, code, 0L, 0);
  	} else if (args->f_id.proto == IPPROTO_TCP) {
  		struct tcphdr *const tcp =
-@@ -1765,85 +1815,148 @@
+@@ -1773,85 +1823,148 @@ lookup_next_rule(struct ip_fw *me, u_int32_t tablearg)
  	return rule;
  }
  
@@ -3670,21 +3745,17 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  static int
  add_table_entry(struct ip_fw_chain *ch, uint16_t tbl, in_addr_t addr,
 -    uint8_t mlen, uint32_t value)
--{
++    uint8_t mlen, ipfw_ether_addr *ether_addr, uint32_t value)
+ {
 -	struct radix_node_head *rnh;
 -	struct table_entry *ent;
 -	struct radix_node *rn;
--
--	if (tbl >= IPFW_TABLES_MAX)
--		return (EINVAL);
--	rnh = ch->tables[tbl];
-+    uint8_t mlen, ipfw_ether_addr *ether_addr, uint32_t value)
-+{
 +	struct ipfw_table_head *th;
 +	struct table_entry *ent, *in_ent;
-+
-+	if (tbl >= IPFW_TABLES_MAX)
-+		return (EINVAL);
+ 
+ 	if (tbl >= IPFW_TABLES_MAX)
+ 		return (EINVAL);
+-	rnh = ch->tables[tbl];
 +	th = &ch->tables[tbl];
  	ent = malloc(sizeof(*ent), M_IPFW_TBL, M_NOWAIT | M_ZERO);
  	if (ent == NULL)
@@ -3741,25 +3812,21 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  static int
  del_table_entry(struct ip_fw_chain *ch, uint16_t tbl, in_addr_t addr,
 -    uint8_t mlen)
--{
++    uint8_t mlen, ipfw_ether_addr *ether_addr)
+ {
 -	struct radix_node_head *rnh;
 -	struct table_entry *ent;
 -	struct sockaddr_in sa, mask;
--
--	if (tbl >= IPFW_TABLES_MAX)
--		return (EINVAL);
++	struct ipfw_table_head *th;
++	struct table_entry_addr sa, mask;
++	int err;
+ 
+ 	if (tbl >= IPFW_TABLES_MAX)
+ 		return (EINVAL);
 -	rnh = ch->tables[tbl];
 -	sa.sin_len = mask.sin_len = 8;
 -	mask.sin_addr.s_addr = htonl(mlen ? ~((1 << (32 - mlen)) - 1) : 0);
 -	sa.sin_addr.s_addr = addr & mask.sin_addr.s_addr;
-+    uint8_t mlen, ipfw_ether_addr *ether_addr)
-+{
-+	struct ipfw_table_head *th;
-+	struct table_entry_addr sa, mask;
-+	int err;
-+
-+	if (tbl >= IPFW_TABLES_MAX)
-+		return (EINVAL);
 +	th = &ch->tables[tbl];
 +	init_table_entry_addr(&sa, &mask, addr, mlen, ether_addr);
  	IPFW_WLOCK(ch);
@@ -3808,7 +3875,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  	return (0);
  }
  
-@@ -1865,7 +1978,12 @@
+@@ -1873,7 +1986,12 @@ init_tables(struct ip_fw_chain *ch)
  	uint16_t j;
  
  	for (i = 0; i < IPFW_TABLES_MAX; i++) {
@@ -3822,17 +3889,16 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  			for (j = 0; j < i; j++) {
  				(void) flush_table(ch, j);
  			}
-@@ -1877,18 +1995,34 @@
+@@ -1885,18 +2003,34 @@ init_tables(struct ip_fw_chain *ch)
  
  static int
  lookup_table(struct ip_fw_chain *ch, uint16_t tbl, in_addr_t addr,
 -    uint32_t *val)
--{
++    ipfw_ether_addr *ether_addr, uint32_t *val)
+ {
 -	struct radix_node_head *rnh;
 -	struct table_entry *ent;
 -	struct sockaddr_in sa;
-+    ipfw_ether_addr *ether_addr, uint32_t *val)
-+{
 +	struct ipfw_table_head *th;
 +	struct table_entry_addr sa, mask;
 +	struct table_entry *ent = NULL;
@@ -3866,19 +3932,16 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  	if (ent != NULL) {
  		*val = ent->value;
  		return (1);
-@@ -1908,20 +2042,20 @@
+@@ -1916,20 +2050,20 @@ count_table_entry(struct radix_node *rn, void *arg)
  static int
  count_table(struct ip_fw_chain *ch, uint32_t tbl, uint32_t *cnt)
  {
 -	struct radix_node_head *rnh;
--
--	if (tbl >= IPFW_TABLES_MAX)
--		return (EINVAL);
--	rnh = ch->tables[tbl];
 +	struct ipfw_table_head *th;
-+
-+	if (tbl >= IPFW_TABLES_MAX)
-+		return (EINVAL);
+ 
+ 	if (tbl >= IPFW_TABLES_MAX)
+ 		return (EINVAL);
+-	rnh = ch->tables[tbl];
 +	th = &ch->tables[tbl];
  	*cnt = 0;
 -	rnh->rnh_walktree(rnh, count_table_entry, cnt);
@@ -3894,7 +3957,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  	ipfw_table * const tbl = arg;
  	ipfw_table_entry *ent;
  
-@@ -1929,11 +2063,23 @@
+@@ -1937,11 +2071,23 @@ dump_table_entry(struct radix_node *rn, void *arg)
  		return (1);
  	ent = &tbl->ent[tbl->cnt];
  	ent->tbl = tbl->tbl;
@@ -3921,7 +3984,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  	ent->value = n->value;
  	tbl->cnt++;
  	return (0);
-@@ -1942,13 +2088,13 @@
+@@ -1950,13 +2096,13 @@ dump_table_entry(struct radix_node *rn, void *arg)
  static int
  dump_table(struct ip_fw_chain *ch, ipfw_table *tbl)
  {
@@ -3938,7 +4001,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  	return (0);
  }
  
-@@ -2055,10 +2201,9 @@
+@@ -2063,10 +2209,9 @@ check_uidgid(ipfw_insn_u32 *insn, int proto, struct ifnet *oif,
   * Parameters:
   *
   *	args->m	(in/out) The packet; we set to NULL when/if we nuke it.
@@ -3952,7 +4015,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
   *	args->oif	Outgoing interface, or NULL if packet is incoming.
   *		The incoming interface is in the mbuf. (in)
   *	args->divert_rule (in/out)
-@@ -2069,6 +2214,7 @@
+@@ -2077,6 +2222,7 @@ check_uidgid(ipfw_insn_u32 *insn, int proto, struct ifnet *oif,
   *	args->next_hop	Socket we are forwarding to (out).
   *	args->f_id	Addresses grabbed from the packet (out)
   * 	args->cookie	a cookie depending on rule action
@@ -3960,7 +4023,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
   *
   * Return value:
   *
-@@ -2092,10 +2238,8 @@
+@@ -2100,10 +2246,8 @@ ipfw_chk(struct ip_fw_args *args)
  	 * the implementation of the various instructions to make sure
  	 * that they still work.
  	 *
@@ -3972,7 +4035,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  	 *
  	 * m | args->m	Pointer to the mbuf, as received from the caller.
  	 *	It may change if ipfw_chk() does an m_pullup, or if it
-@@ -2103,12 +2247,10 @@
+@@ -2111,12 +2255,10 @@ ipfw_chk(struct ip_fw_args *args)
  	 *	XXX This has to change, so that ipfw_chk() never modifies
  	 *	or consumes the buffer.
  	 * ip	is the beginning of the ip(4 or 6) header.
@@ -3986,7 +4049,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  
  	/*
  	 * For rules which contain uid/gid or jail constraints, cache
-@@ -2204,6 +2346,9 @@
+@@ -2212,6 +2354,9 @@ ipfw_chk(struct ip_fw_args *args)
  	if (m->m_flags & M_SKIP_FIREWALL)
  		return (IP_FW_PASS);	/* accept */
  
@@ -3996,7 +4059,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  	dst_ip.s_addr = 0;		/* make sure it is initialized */
  	src_ip.s_addr = 0;		/* make sure it is initialized */
  	pktlen = m->m_pkthdr.len;
-@@ -2231,15 +2376,25 @@
+@@ -2239,15 +2384,25 @@ do {									\
  	/*
  	 * if we have an ether header,
  	 */
@@ -4025,7 +4088,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  		hlen = sizeof(struct ip6_hdr);
  		proto = ip6->ip6_nxt;
  
-@@ -2401,10 +2556,10 @@
+@@ -2409,10 +2564,10 @@ do {									\
  		args->f_id.dst_ip = 0;
  		args->f_id.flow_id6 = ntohl(ip6->ip6_flow);
  	} else if (pktlen >= sizeof(struct ip) &&
@@ -4038,7 +4101,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  
  		/*
  		 * Collect parameters into local variables for faster matching.
-@@ -2412,13 +2567,8 @@
+@@ -2420,13 +2575,8 @@ do {									\
  		proto = ip->ip_p;
  		src_ip = ip->ip_src;
  		dst_ip = ip->ip_dst;
@@ -4054,7 +4117,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  		pktlen = ip_len < pktlen ? ip_len : pktlen;
  
  		if (offset == 0) {
-@@ -2449,6 +2599,14 @@
+@@ -2457,6 +2607,14 @@ do {									\
  		ip = mtod(m, struct ip *);
  		args->f_id.src_ip = ntohl(src_ip.s_addr);
  		args->f_id.dst_ip = ntohl(dst_ip.s_addr);
@@ -4069,7 +4132,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  	}
  #undef PULLUP_TO
  	if (proto) { /* we may have port numbers, store them */
-@@ -2484,7 +2642,7 @@
+@@ -2492,7 +2650,7 @@ do {									\
  		int skipto = mtag ? divert_cookie(mtag) : 0;
  
  		f = chain->rules;
@@ -4078,7 +4141,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  			if (skipto >= IPFW_DEFAULT_RULE) {
  				IPFW_RUNLOCK(chain);
  				return (IP_FW_DENY); /* invalid */
-@@ -2510,6 +2668,7 @@
+@@ -2518,6 +2676,7 @@ do {									\
  	for (; f; f = f->next) {
  		ipfw_insn *cmd;
  		uint32_t tablearg = 0;
@@ -4086,7 +4149,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  		int l, cmdlen, skip_or; /* skip rest of OR block */
  
  again:
-@@ -2555,11 +2714,6 @@
+@@ -2563,11 +2722,6 @@ check_body:
  				match = 1;
  				break;
  
@@ -4098,7 +4161,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  			case O_GID:
  			case O_UID:
  			case O_JAIL:
-@@ -2596,23 +2750,20 @@
+@@ -2604,23 +2758,20 @@ check_body:
  				    m->m_pkthdr.rcvif, (ipfw_insn_if *)cmd);
  				break;
  
@@ -4114,11 +4177,6 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
 -					    ( want[0] == (hdr[0] & mask[0]) &&
 -					      want[1] == (hdr[1] & mask[1]) &&
 -					      want[2] == (hdr[2] & mask[2]) );
--				}
--				break;
--
--			case O_MAC_TYPE:
--				if (args->eh != NULL) {
 +			case O_ETHER_SRC:
 +			case O_ETHER_DST:
 +				if (args->eh != NULL) {	/* have ethernet header */
@@ -4128,15 +4186,17 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
 +						&args->f_id.src_ether :
 +						&args->f_id.dst_ether);
 +					match = ether_addr_allow(want, a);
-+				}
-+				break;
-+
+ 				}
+ 				break;
+ 
+-			case O_MAC_TYPE:
+-				if (args->eh != NULL) {
 +			case O_ETHER_TYPE:
 +				if (args->eh != NULL) {	/* have ethernet header */
  					u_int16_t *p =
  					    ((ipfw_insn_u16 *)cmd)->ports;
  					int i;
-@@ -2633,7 +2784,7 @@
+@@ -2641,7 +2792,7 @@ check_body:
  				break;
  
  			case O_LAYER2:
@@ -4145,7 +4205,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  				break;
  
  			case O_DIVERTED:
-@@ -2659,14 +2810,23 @@
+@@ -2667,14 +2818,23 @@ check_body:
  
  			case O_IP_SRC_LOOKUP:
  			case O_IP_DST_LOOKUP:
@@ -4175,7 +4235,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  				    if (!match)
  					break;
  				    if (cmdlen == F_INSN_SIZE(ipfw_insn_u32))
-@@ -3042,12 +3202,16 @@
+@@ -3050,12 +3210,16 @@ check_body:
  				 * push it into mbuf.
  				 */
  				if (cmd->len & F_NOT) { /* `untag' action */
@@ -4194,7 +4254,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  				}
  				match = (cmd->len & F_NOT) ? 0: 1;
  				break;
-@@ -3058,13 +3222,108 @@
+@@ -3066,13 +3230,108 @@ check_body:
  					match = 1;
  				break;
  
@@ -4305,19 +4365,18 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  					break;
  				}
  
-@@ -3084,7 +3343,10 @@
+@@ -3092,7 +3351,10 @@ check_body:
  						match =
  						    mtag->m_tag_id >= p[0] &&
  						    mtag->m_tag_id <= p[1];
--				}
 +					if (match)
 +						args->f_id.tag = mtag->m_tag_id; 
-+				}
+ 				}
 +
  				break;
  			}
  				
-@@ -3131,7 +3393,7 @@
+@@ -3139,7 +3401,7 @@ check_body:
  			 */
  			case O_LIMIT:
  			case O_KEEP_STATE:
@@ -4326,7 +4385,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  				    (ipfw_insn_limit *)cmd, args, tablearg)) {
  					retval = IP_FW_DENY;
  					goto done; /* error/limit violation */
-@@ -3196,7 +3458,7 @@
+@@ -3204,7 +3466,7 @@ check_body:
  			case O_TEE: {
  				struct divert_tag *dt;
  
@@ -4335,7 +4394,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  					break;
  				mtag = m_tag_get(PACKET_TAG_DIVERT,
  						sizeof(struct divert_tag),
-@@ -3273,7 +3535,7 @@
+@@ -3281,7 +3543,7 @@ check_body:
  			case O_FORWARD_IP: {
  				struct sockaddr_in *sa;
  				sa = &(((ipfw_insn_sa *)cmd)->sa);
@@ -4344,7 +4403,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  					break;
  				if (!q || dyn_dir == MATCH_FORWARD) {
  					if (sa->sin_addr.s_addr == INADDR_ANY) {
-@@ -3821,6 +4083,7 @@
+@@ -3829,6 +4091,7 @@ check_ipfw_struct(struct ip_fw *rule, int size)
  #endif
  		case O_IP4:
  		case O_TAG:
@@ -4352,7 +4411,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  			if (cmdlen != F_INSN_SIZE(ipfw_insn))
  				goto bad_size;
  			break;
-@@ -3893,6 +4156,8 @@
+@@ -3901,6 +4164,8 @@ check_ipfw_struct(struct ip_fw *rule, int size)
  
  		case O_IP_SRC_LOOKUP:
  		case O_IP_DST_LOOKUP:
@@ -4361,7 +4420,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  			if (cmd->arg1 >= IPFW_TABLES_MAX) {
  				printf("ipfw: invalid table number %d\n",
  				    cmd->arg1);
-@@ -3903,8 +4168,9 @@
+@@ -3911,8 +4176,9 @@ check_ipfw_struct(struct ip_fw *rule, int size)
  				goto bad_size;
  			break;
  
@@ -4373,7 +4432,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  				goto bad_size;
  			break;
  
-@@ -3918,9 +4184,10 @@
+@@ -3926,9 +4192,10 @@ check_ipfw_struct(struct ip_fw *rule, int size)
  				goto bad_size;
  			break;
  
@@ -4385,7 +4444,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  			if (cmdlen < 2 || cmdlen > 31)
  				goto bad_size;
  			break;
-@@ -3970,7 +4237,6 @@
+@@ -3978,7 +4245,6 @@ check_ipfw_struct(struct ip_fw *rule, int size)
  			if (cmdlen != F_INSN_SIZE(ipfw_insn_nat))
   				goto bad_size;		
   			goto check_action;
@@ -4393,7 +4452,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  		case O_CHECK_STATE:
  		case O_COUNT:
  		case O_ACCEPT:
-@@ -4286,7 +4552,7 @@
+@@ -4294,7 +4560,7 @@ ipfw_ctl(struct sockopt *sopt)
  			if (error)
  				break;
  			error = add_table_entry(&layer3_chain, ent.tbl,
@@ -4402,7 +4461,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  		}
  		break;
  
-@@ -4299,7 +4565,7 @@
+@@ -4307,7 +4573,7 @@ ipfw_ctl(struct sockopt *sopt)
  			if (error)
  				break;
  			error = del_table_entry(&layer3_chain, ent.tbl,
@@ -4411,10 +4470,11 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw2.c
  		}
  		break;
  
-diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw_pfil.c
---- a/sys/netinet/ip_fw_pfil.c	Fri May 15 20:17:22 2009 +0300
-+++ b/sys/netinet/ip_fw_pfil.c	Fri May 15 20:42:53 2009 +0300
-@@ -48,6 +48,7 @@
+diff --git a/sys/netinet/ip_fw_pfil.c b/sys/netinet/ip_fw_pfil.c
+index 3fdb6b9..42cc23a 100644
+--- a/sys/netinet/ip_fw_pfil.c
++++ b/sys/netinet/ip_fw_pfil.c
+@@ -48,6 +48,7 @@ __FBSDID("$FreeBSD$");
  #include <sys/sysctl.h>
  
  #include <net/if.h>
@@ -4422,7 +4482,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw_pfil.c
  #include <net/pfil.h>
  
  #include <netinet/in.h>
-@@ -56,6 +57,7 @@
+@@ -56,6 +57,7 @@ __FBSDID("$FreeBSD$");
  #include <netinet/ip_fw.h>
  #include <netinet/ip_divert.h>
  #include <netinet/ip_dummynet.h>
@@ -4430,7 +4490,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw_pfil.c
  
  #include <netgraph/ng_ipfw.h>
  
-@@ -88,6 +90,7 @@
+@@ -88,6 +90,7 @@ ipfw_check_in(void *arg, struct mbuf **m0, struct ifnet *ifp, int dir,
  {
  	struct ip_fw_args args;
  	struct ng_ipfw_tag *ng_tag;
@@ -4438,7 +4498,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw_pfil.c
  	struct m_tag *dn_tag;
  	int ipfw = 0;
  	int divert;
-@@ -109,6 +112,11 @@
+@@ -109,6 +112,11 @@ ipfw_check_in(void *arg, struct mbuf **m0, struct ifnet *ifp, int dir,
  		m_tag_delete(*m0, (struct m_tag *)ng_tag);
  	}
  
@@ -4450,7 +4510,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw_pfil.c
  again:
  	dn_tag = m_tag_find(*m0, PACKET_TAG_DUMMYNET, NULL);
  	if (dn_tag != NULL){
-@@ -210,6 +218,7 @@
+@@ -210,6 +218,7 @@ ipfw_check_out(void *arg, struct mbuf **m0, struct ifnet *ifp, int dir,
  {
  	struct ip_fw_args args;
  	struct ng_ipfw_tag *ng_tag;
@@ -4458,7 +4518,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw_pfil.c
  	struct m_tag *dn_tag;
  	int ipfw = 0;
  	int divert;
-@@ -231,6 +240,11 @@
+@@ -231,6 +240,11 @@ ipfw_check_out(void *arg, struct mbuf **m0, struct ifnet *ifp, int dir,
  		m_tag_delete(*m0, (struct m_tag *)ng_tag);
  	}
  
@@ -4470,10 +4530,40 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw_pfil.c
  again:
  	dn_tag = m_tag_find(*m0, PACKET_TAG_DUMMYNET, NULL);
  	if (dn_tag != NULL) {
-@@ -417,33 +431,135 @@
+@@ -417,17 +431,139 @@ nodivert:
  	return 1;
  }
  
++static inline int
++ipfw_ether_check_init(struct ip_fw_args *args, struct mbuf **m0,
++    struct ifnet *ifp, int dir, struct inpcb *inp)
++{
++	struct m_tag *dn_tag;
++	struct dn_pkt_tag *dt;
++
++	bzero(args, sizeof(*args));
++	args->m = *m0;
++	args->flags = IP_FW_ARGS_LAYER2;
++	args->eh = mtod(*m0, struct ether_header *);
++	args->inp = inp;
++	if (dir == PFIL_OUT)
++		args->oif = ifp;
++
++	dn_tag = m_tag_find(*m0, PACKET_TAG_DUMMYNET, NULL);
++	if (dn_tag != NULL) {
++		dt = (struct dn_pkt_tag *)(dn_tag+1);
++		args->rule = dt->rule;
++
++		m_tag_delete(*m0, dn_tag);
++
++		if (args->rule != NULL && fw_one_pass)
++			/* dummynet packet, already partially processed */
++			return (0);
++	}
++
++	return (1);
++}
++
 +int
 +ipfw_ether_check_in(void *arg, struct mbuf **m0, struct ifnet *ifp, int dir,
 +    struct inpcb *inp)
@@ -4487,13 +4577,11 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw_pfil.c
 +	if ((*m0)->m_flags & M_PROMISC)
 +		return 0;
 +
-+	bzero(&args, sizeof(args));
-+	args.m = *m0;
-+ 	args.rule = ip_dn_claim_rule(*m0);
-+	args.flags = IP_FW_ARGS_LAYER2;
-+	args.eh = mtod(*m0, struct ether_header *);
-+	args.inp = inp;
-+	error = ip_fw_chk_ptr(&args);
++again:
++	if (ipfw_ether_check_init(&args, m0, ifp, dir, inp) == 0)
++		return 0;
++
++	error = ipfw_chk(&args);
 +	*m0 = args.m;
 +
 +	if (error == IP_FW_PASS)
@@ -4501,6 +4589,8 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw_pfil.c
 +
 +	if (DUMMYNET_LOADED && (error == IP_FW_DUMMYNET)) {
 +		ip_dn_io_ptr(m0, DN_TO_ETH_DEMUX, &args);
++		if (*m0 != NULL)
++			goto again;
 +		return 0;
 +	}
 +
@@ -4524,15 +4614,11 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw_pfil.c
 +
 +	KASSERT(dir == PFIL_OUT, ("ipfw_ether_check_out wrong direction!"));
 +
-+	bzero(&args, sizeof(args));
++again:
++	if (ipfw_ether_check_init(&args, m0, ifp, dir, inp) == 0)
++		return 0;
 +
-+	args.m = *m0;
-+	args.rule = ip_dn_claim_rule(*m0);
-+	args.oif = ifp;
-+	args.flags = IP_FW_ARGS_LAYER2;
-+	args.eh = mtod(*m0, struct ether_header *);
-+	args.inp = inp;
-+	error = ip_fw_chk_ptr(&args);
++	error = ipfw_chk(&args);
 +	*m0 = args.m;
 +
 +	if (error == IP_FW_PASS)
@@ -4546,6 +4632,8 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw_pfil.c
 +		else
 +			dn_dir = DN_TO_ETH_OUT;
 +		ip_dn_io_ptr(m0, dn_dir, &args);
++		if (*m0 != NULL)
++			goto again;
 +		return 0;
 +	}
 +
@@ -4568,11 +4656,14 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw_pfil.c
  
  	pfh_inet = pfil_head_get(PFIL_TYPE_AF, AF_INET);
 -	if (pfh_inet == NULL)
+-		return ENOENT;
 +	if (pfh_inet != NULL) {
 +		pfil_add_hook(ipfw_check_in, NULL, PFIL_IN | PFIL_WAITOK, pfh_inet);
 +		pfil_add_hook(ipfw_check_out, NULL, PFIL_OUT | PFIL_WAITOK, pfh_inet);
 +	}
-+
+ 
+-	pfil_add_hook(ipfw_check_in, NULL, PFIL_IN | PFIL_WAITOK, pfh_inet);
+-	pfil_add_hook(ipfw_check_out, NULL, PFIL_OUT | PFIL_WAITOK, pfh_inet);
 +	pfh_ether = pfil_head_get(PFIL_TYPE_IFT, IFT_ETHER);
 +	if (pfh_ether != NULL) {
 +		pfil_add_hook(ipfw_ether_check_in, NULL, PFIL_IN | PFIL_WAITOK, pfh_ether);
@@ -4580,14 +4671,11 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw_pfil.c
 +	}
 +
 +	if (pfh_inet == NULL || pfh_ether == NULL)
- 		return ENOENT;
++		return ENOENT;
  
--	pfil_add_hook(ipfw_check_in, NULL, PFIL_IN | PFIL_WAITOK, pfh_inet);
--	pfil_add_hook(ipfw_check_out, NULL, PFIL_OUT | PFIL_WAITOK, pfh_inet);
--
  	return 0;
  }
- 
+@@ -435,14 +571,22 @@ ipfw_hook(void)
  static int
  ipfw_unhook(void)
  {
@@ -4596,11 +4684,14 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw_pfil.c
  
  	pfh_inet = pfil_head_get(PFIL_TYPE_AF, AF_INET);
 -	if (pfh_inet == NULL)
+-		return ENOENT;
 +	if (pfh_inet != NULL) {
 +		pfil_remove_hook(ipfw_check_in, NULL, PFIL_IN | PFIL_WAITOK, pfh_inet);
 +		pfil_remove_hook(ipfw_check_out, NULL, PFIL_OUT | PFIL_WAITOK, pfh_inet);
 +	}
-+
+ 
+-	pfil_remove_hook(ipfw_check_in, NULL, PFIL_IN | PFIL_WAITOK, pfh_inet);
+-	pfil_remove_hook(ipfw_check_out, NULL, PFIL_OUT | PFIL_WAITOK, pfh_inet);
 +	pfh_ether = pfil_head_get(PFIL_TYPE_IFT, IFT_ETHER);
 +	if (pfh_ether != NULL) {
 +		pfil_remove_hook(ipfw_ether_check_in, NULL, PFIL_IN | PFIL_WAITOK, pfh_ether);
@@ -4608,11 +4699,7 @@ diff -r 9191227a0bdc -r ba1c49944750 sys/netinet/ip_fw_pfil.c
 +	}
 +
 +	if (pfh_inet == NULL || pfh_ether == NULL)
- 		return ENOENT;
++		return ENOENT;
  
--	pfil_remove_hook(ipfw_check_in, NULL, PFIL_IN | PFIL_WAITOK, pfh_inet);
--	pfil_remove_hook(ipfw_check_out, NULL, PFIL_OUT | PFIL_WAITOK, pfh_inet);
--
  	return 0;
  }
- 
